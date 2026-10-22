@@ -8,6 +8,34 @@
 
 ![AC/DC：沉浸式大图、艺术字与本地曲库](docs/previews/preview-01.png)
 
+**AC/DC · 中文艺人资料**
+
+![AC/DC 中文艺人资料](docs/previews/preview-02.png)
+
+**Daft Punk · 更多菜单**
+
+![Daft Punk 更多菜单](docs/previews/preview-03.png)
+
+**Bruno Mars · 方图羽化与艺术字**
+
+![Bruno Mars 方图羽化与艺术字](docs/previews/preview-04.png)
+
+**周杰伦 · 头图与三列歌曲**
+
+![周杰伦头图与三列歌曲](docs/previews/preview-05.png)
+
+**周杰伦 · 编辑艺人**
+
+![周杰伦编辑艺人](docs/previews/preview-06.png)
+
+**Marshmello · 图片与艺术字**
+
+![Marshmello 图片与艺术字](docs/previews/preview-07.png)
+
+**插件设置 · 语言、收藏与别名**
+
+![插件设置，包含艺人别名识别](docs/previews/preview-08.png)
+
 ## 功能
 
 - **沉浸式头图**：动态取色、宽渐隐、方图羽化、滚动模糊与折叠顶栏。
@@ -40,43 +68,6 @@
 ```
 
 手动绑定需要开启 `recognize_artist_aliases`；关闭后手动和自动别名绑定都会忽略。修改绑定或切换开关会隔离旧匹配缓存，无需手动清除。详细规则见 [身份与别名设计](docs/artist-design.md#apple-music-身份与别名)。
-
-## 更多预览
-
-以下 8 张预览来自用户提供的截图，包含上方主图。
-
-<details>
-<summary>展开其余 7 张预览</summary>
-
-**AC/DC · 中文艺人资料**
-
-![AC/DC 中文艺人资料](docs/previews/preview-02.png)
-
-**Daft Punk · 更多菜单**
-
-![Daft Punk 更多菜单](docs/previews/preview-03.png)
-
-**Bruno Mars · 方图羽化与艺术字**
-
-![Bruno Mars 方图羽化与艺术字](docs/previews/preview-04.png)
-
-**周杰伦 · 头图与三列歌曲**
-
-![周杰伦头图与三列歌曲](docs/previews/preview-05.png)
-
-**周杰伦 · 编辑艺人**
-
-![周杰伦编辑艺人](docs/previews/preview-06.png)
-
-**Marshmello · 图片与艺术字**
-
-![Marshmello 图片与艺术字](docs/previews/preview-07.png)
-
-**插件设置 · 语言、收藏与别名**
-
-![插件设置，包含艺人别名识别](docs/previews/preview-08.png)
-
-</details>
 
 ## 开发
 
