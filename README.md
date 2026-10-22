@@ -8,33 +8,24 @@
 
 ![AC/DC：沉浸式大图、艺术字与本地曲库](docs/previews/preview-01.png)
 
-**AC/DC · 中文艺人资料**
+<details>
+<summary>更多预览</summary>
 
 ![AC/DC 中文艺人资料](docs/previews/preview-02.png)
 
-**Daft Punk · 更多菜单**
-
 ![Daft Punk 更多菜单](docs/previews/preview-03.png)
-
-**Bruno Mars · 方图羽化与艺术字**
 
 ![Bruno Mars 方图羽化与艺术字](docs/previews/preview-04.png)
 
-**周杰伦 · 头图与三列歌曲**
-
 ![周杰伦头图与三列歌曲](docs/previews/preview-05.png)
-
-**周杰伦 · 编辑艺人**
 
 ![周杰伦编辑艺人](docs/previews/preview-06.png)
 
-**Marshmello · 图片与艺术字**
-
 ![Marshmello 图片与艺术字](docs/previews/preview-07.png)
 
-**插件设置 · 语言、收藏与别名**
-
 ![插件设置，包含艺人别名识别](docs/previews/preview-08.png)
+
+</details>
 
 ## 功能
 
