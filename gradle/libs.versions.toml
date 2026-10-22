@@ -1,0 +1,13 @@
+[versions]
+kotlin = "2.4.20"
+compose = "1.12.1"
+workshop = "0.1.0-dev22"
+
+[libraries]
+workshop-api = { group = "com.github.Moriafly", name = "spw-workshop-api", version.ref = "workshop" }
+compose-ui = { group = "org.jetbrains.compose.ui", name = "ui", version.ref = "compose" }
+compose-foundation = { group = "org.jetbrains.compose.foundation", name = "foundation", version.ref = "compose" }
+compose-runtime = { group = "org.jetbrains.compose.runtime", name = "runtime", version.ref = "compose" }
+
+[plugins]
+compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

@@ -1,0 +1,18 @@
+Salt Artist
+Copyright 2026 asukua and Salt Artist contributors
+
+Salt Artist is an independent plugin for Salt Player for Windows.
+Project source: https://github.com/asukua/salt-artist
+
+It uses the SPW Workshop API and Gradle plugin by Moriafly and contributors:
+https://github.com/Moriafly/spw-workshop-api
+SPW Workshop API is licensed under Apache-2.0 and is supplied by the host
+at runtime; the API and the host application are not bundled here.
+
+The Gradle Wrapper is distributed by Gradle under Apache-2.0.
+Copyright and license notices in the wrapper scripts are retained.
+
+Artist photographs, artwork, logos, biographies and third-party trademarks
+shown in previews or retrieved at runtime remain the property of their
+respective rights holders. They are not licensed by this project's source
+code license. See THIRD_PARTY_NOTICES.md.

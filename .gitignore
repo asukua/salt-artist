@@ -1,0 +1,31 @@
+# Build outputs and local caches
+.gradle/
+.kotlin/
+build/
+out/
+.probe/
+.verify/
+
+# Editor and machine-local files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+local.properties
+.env
+.env.*
+*.log
+*.bak*
+*.tmp
+__pycache__/
+*.py[cod]
+
+# Local deployment data and development-only archives
+/scripts/deploy-local.ps1
+/docs/archive/
+/docs/screenshots/
+
+# Distributable binaries belong in GitHub Releases
+*.spmod
+*.spmod.sha256

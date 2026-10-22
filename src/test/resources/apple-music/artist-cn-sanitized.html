@@ -1,0 +1,40 @@
+<!doctype html><html lang="zh-Hans"><head>
+<!-- Structure checked against public Apple Music CN artist pages on 2026-10-23.
+     IDs/names/image paths and biography below are synthetic. No Apple biography is reproduced. -->
+<script type="application/ld+json">{
+  "@type":"MusicGroup","url":"https://music.apple.com/cn/artist/other/999","genre":["Rock"]
+}</script>
+<script type="application/ld+json">{
+  "@context":"http://schema.org","@type":"MusicGroup","name":"测试艺人",
+  "description":"An English fallback that must not override the Chinese header.",
+  "genre":["Hip-Hop/Rap","国语流行"],"url":"https://music.apple.com/cn/artist/test/42"
+}</script>
+</head><body>
+<script id="serialized-server-data" type="application/json">{
+  "data":[{
+    "intent":{"$kind":"ArtistDetailPageIntent","contentDescriptor":{"kind":"artist","identifiers":{"storeAdamID":"42"},"url":"https://music.apple.com/cn/artist/test/42"}},
+    "data":{
+      "canonicalURL":"https://music.apple.com/cn/artist/test/42",
+      "sections":[{
+        "id":"artists_42_default.marker.ArtistDetailHeader-ArtistDetailHeader","itemKind":"artistDetailHeader",
+        "items":[{
+          "id":"42","title":"测试艺人",
+          "contentDescriptor":{"kind":"artist","identifiers":{"storeAdamID":"42"},"url":"https://music.apple.com/cn/artist/test/42"},
+          "artistLogo":null,
+          "circleArtwork":{"dictionary":{"url":"https://is1-ssl.mzstatic.com/image/thumb/test/avatar/{w}x{h}{c}.{f}","width":1000,"height":1000},"cropStyle":"sr"},
+          "artwork":{"dictionary":{"url":"https://is1-ssl.mzstatic.com/image/thumb/test/square/{w}x{h}{c}.{f}"},"cropStyle":"sr"},
+          "wideArtwork":null,"wideVideoArtwork":null,
+          "colorBackdropArtwork":{"dictionary":{"url":"https://is1-ssl.mzstatic.com/image/thumb/test/backdrop/{w}x{h}{c}.{f}"},"cropStyle":"bb"},
+          "bio":"这是一段为解析测试创作的中文介绍。\n\n该艺人的资料由公开页面提供，缺失事实不作补全。",
+          "bioAction":{"destination":{"kind":"modalPage","intent":{"$kind":"ArtistBiographyPageIntent","contentDescriptor":{"kind":"artist","identifiers":{"storeAdamID":"42"}}}}}
+        }]
+      },{
+        "id":"similar-artists","itemKind":"bubbleLockup","items":[{
+          "id":"999","title":"其他艺人","bio":"这段介绍属于其他艺人，绝不能被用作当前艺人的资料。",
+          "artwork":{"dictionary":{"url":"https://is1-ssl.mzstatic.com/image/thumb/test/wrong/{w}x{h}{c}.{f}"},"cropStyle":"bb"}
+        }]
+      }]
+    }
+  }],"userTokenHash":"redacted"
+}</script>
+</body></html>

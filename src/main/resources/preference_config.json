@@ -1,0 +1,94 @@
+{
+  "configs": [
+    {
+      "title": "艺人页面",
+      "config": "artist-page.json",
+      "preferences": [
+        {
+          "key": "immersive_hero",
+          "type": "switch",
+          "title": "沉浸式头图",
+          "summary": "关闭后头图退化为取色渐变，适合低配机器或不喜欢大图的情况",
+          "default_value": true
+        },
+        {
+          "key": "dim_backdrop",
+          "type": "switch",
+          "title": "暗色背景",
+          "summary": "沿用 Apple Music 的深色氛围，关闭后使用封面主色的浅色渐变",
+          "default_value": true
+        },
+        {
+          "key": "show_track_numbers",
+          "type": "switch",
+          "title": "显示曲目序号",
+          "summary": "歌曲列表左侧显示序号",
+          "default_value": true
+        },
+        {
+          "key": "recognize_artist_aliases",
+          "type": "switch",
+          "title": "识别艺人多语言别名",
+          "summary": "按已核实的别名与 Apple Music 艺人 ID 匹配头像和资料；无法确认时保留曲库封面",
+          "default_value": true
+        },
+        {
+          "key": "artist_identity_overrides",
+          "type": "edittext",
+          "title": "手动指定 Apple Music 艺人",
+          "summary": "需开启别名识别。格式：艺人名=AM艺人链接或ID；多个用英文分号分隔。例：初音未来=307078957",
+          "default_value": ""
+        },
+        {
+          "key": "favorite_artists_first",
+          "type": "switch",
+          "title": "收藏的艺人优先",
+          "summary": "在艺术家总列表中将收藏的艺人排在前面，组内保留原顺序",
+          "default_value": true
+        },
+        {
+          "key": "preferred_artist_language",
+          "type": "list",
+          "title": "艺人资料优先语言",
+          "summary": "优先获取所选语言的艺人简介与基础资料",
+          "entries": ["简体中文", "英语", "日语"],
+          "entry_values": ["CHINESE", "ENGLISH", "JAPANESE"],
+          "default_value": "CHINESE"
+        },
+        {
+          "key": "show_other_artist_languages",
+          "type": "switch",
+          "title": "显示非优先语言资料",
+          "summary": "优先语言缺失时显示其他语言；关闭后只显示优先语言，完全无资料时回退曲库信息",
+          "default_value": true
+        }
+      ]
+    },
+    {
+      "title": "艺人写真",
+      "config": "artist-photos.json",
+      "preferences": [
+        {
+          "type": "button",
+          "title": "打开写真目录",
+          "summary": "把高清写真命名为「艺人名.jpg / .png / .webp」放进该目录，艺人页会自动优先使用",
+          "arrow_type": "none",
+          "on_click": "dev.saltartist.SaltArtistPlugin.openPhotoDirectory"
+        }
+      ]
+    },
+    {
+      "title": "Apple Music 缓存",
+      "config": "apple-music.json",
+      "preferences": [
+        {
+          "type": "button",
+          "title": "清除缓存",
+          "summary": "缓存里存着从 Apple Music 抓到的艺人头图与艺术字（默认 30 天过期）。清空后下次打开艺人页会重新下载",
+          "arrow_type": "none",
+          "on_click": "dev.saltartist.SaltArtistPlugin.clearAppleMusicCache"
+        }
+      ]
+    }
+  ]
+}
