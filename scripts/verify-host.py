@@ -2,7 +2,7 @@
 
 Example (replace both paths with your local installation paths):
   python scripts/verify-host.py --jar "/path/to/SPW/app/ffmpeg-x64.dll" \
-      --java-home "/path/to/jdk-25" --output build/reports/host-compatibility/1.19.1
+      --java-home "/path/to/jdk-25" --output build/reports/host-compatibility/1.19.2
 
 The classpath archive is named ffmpeg-x64.dll in Steam's SPW distribution.
 Only the output directory is written. Exit code 1 means a contract was not verified.

@@ -41,7 +41,7 @@
 
 ## 兼容与安装
 
-当前登记兼容 **SPW 1.19.0 / 1.19.1**；艺人列表增强按 1.19.1 适配。其他宿主版本保留原生页面，升级宿主后可能需要更新插件。
+当前登记兼容 **SPW 1.19.0 / 1.19.1 / 1.19.2**；艺人列表增强支持 1.19.1 / 1.19.2。其他宿主版本保留原生页面，升级宿主后可能需要更新插件。
 
 1. 从 [Releases](https://github.com/asukua/salt-artist/releases/latest) 下载 `.spmod`；需要校验时使用同一 Release 附带的 `.sha256` 文件。
 2. 在 SPW「模组管理」中导入并启用，授予相关权限。
@@ -71,7 +71,7 @@
 ./gradlew test plugin
 ```
 
-Windows PowerShell 使用 `.\gradlew.bat test plugin`。产物位于 `build/libs/plugin-dev.saltartist-0.1.5.spmod`。首次构建需要联网获取依赖。
+Windows PowerShell 使用 `.\gradlew.bat test plugin`。产物位于 `build/libs/plugin-dev.saltartist-0.1.6.spmod`。首次构建需要联网获取依赖。
 
 插件使用 Kotlin 与 Compose Multiplatform，运行时由宿主提供。接入、权限与反射约束见 [兼容记录](docs/host-compatibility.md)，身份匹配、缓存与列表 Hook 的取舍见 [设计文档](docs/artist-design.md)。
 

@@ -64,6 +64,15 @@ object HookTargets {
                 itemClass = "androidx.compose.ui.\u10A5",
             ),
         ),
+        "1.19.2" to HostTargets(
+            artistPageClass = "androidx.compose.ui.\u03B8",
+            artistViewModelClass = "androidx.compose.ui.\u10A9",
+            artistAvatarClass = "androidx.compose.ui.\u0843",
+            directory = DirectoryTargets(
+                screenClass = "androidx.compose.ui.\u0417",
+                itemClass = "androidx.compose.ui.\u10A5",
+            ),
+        ),
     )
 
     val supportedHostVersions: Set<String> get() = verifiedHosts.keys
