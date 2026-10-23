@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.saltartist"
-version = "0.1.8"
+version = "0.1.9"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_25
@@ -28,6 +28,7 @@ kotlin {
 dependencies {
     // 宿主在运行时提供 Kotlin 与 Compose，插件内不得重复打包。
     compileOnly(kotlin("stdlib"))
+    compileOnly("net.java.dev.jna:jna:5.18.1")
     compileOnly(libs.workshop.api)
     compileOnly(libs.compose.ui)
     compileOnly(libs.compose.foundation)

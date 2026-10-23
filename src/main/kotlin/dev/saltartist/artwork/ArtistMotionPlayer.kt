@@ -14,6 +14,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.platform.LocalWindowInfo
 import dev.saltartist.PluginLog
 import kotlinx.coroutines.CancellationException
@@ -33,116 +36,98 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 
-/**
- * The host already ships MediaMP, libmpv, and its native Compose/Skia renderer.
- * Each hero owns a separate silent player; it never borrows PlaybackController.
- * Reflection is resolved only when the visible hero requests motion, after hooks
- * have been installed. No decoder, executable, or host class enters the plugin.
- */
+/** CPU frames are drawn as ordinary raster images; no host video Surface or GPU handles. */
 @Composable
-internal fun ArtistMotionSurface(
-    url: String,
-    modifier: Modifier,
-    log: PluginLog,
-    onFailure: () -> Unit = {},
-) {
-    // Headless decoding did not verify the shared GPU surface. Do not create a
-    // native player until the reported host exits have been diagnosed.
-    if (!nativeMotionEnabled()) return
+internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog, onFailure: () -> Unit = {}) {
     var failed by remember(url) { mutableStateOf(false) }
-    val failureCallback by rememberUpdatedState(onFailure)
-    // Returning removes the effects and native surface, so switching windows
-    // does not leave a hidden decoder/network stream running in the background.
     if (failed || !LocalWindowInfo.current.isWindowFocused) return
-
-    var session by remember(url) { mutableStateOf<HostMotionSession?>(null) }
-    var ready by remember(url) { mutableStateOf(false) }
-    val ownership = remember(url) { AtomicReference<HostMotionSession?>(null) }
-    fun fail(error: Throwable?) {
-        if (failed) return
-        failed = true
-        log.logOnce("motion-failed-$url", "artist motion unavailable; keeping poster: ${log.describe(error)}")
-        failureCallback()
-    }
-
-    DisposableEffect(ownership) {
+    val worker = remember(url) { SoftwareMotionWorker() }
+    val frames = remember(worker) { OwnedMotionFrame<org.jetbrains.skia.Image>() }
+    var revision by remember(worker) { mutableStateOf(0L) }
+    DisposableEffect(worker) {
+        ArtistMotionPlayers.addSoftware(worker)
         onDispose {
-            ownership.getAndSet(null)?.controller?.let {
-                ArtistMotionPlayers.remove(it)
-                it.closeAsync()
-            }
+            worker.close()
+            ArtistMotionPlayers.removeSoftware(worker)
+            frames.close()
         }
     }
-    LaunchedEffect(url) {
-        val generation = ArtistMotionPlayers.generation()
-        if (!ArtistMotionPlayers.accepts(generation)) return@LaunchedEffect
-        var opened: HostMotionSession? = null
+    LaunchedEffect(worker) {
         try {
             withContext(Dispatchers.IO) {
-                require(isAppleMotionUrl(url)) { "unsupported artist motion URL" }
-                val stream = resolveAppleMotionStream(url)
-                ensureActive()
-                if (!ArtistMotionPlayers.accepts(generation)) throw CancellationException("motion plugin stopped while opening")
-                val candidate = HostMotionSession.create()
-                opened = candidate
-                ownership.set(candidate)
-                if (!ArtistMotionPlayers.add(candidate.controller, generation)) {
-                    throw CancellationException("motion plugin stopped while opening")
+                require(isAppleMotionUrl(url))
+                worker.open(resolveAppleMotionStream(url))
+                val started = System.nanoTime()
+                var received = false
+                while (isActive && !worker.isClosed) {
+                    val frame = worker.read()
+                    if (frame != null) {
+                        val image = org.jetbrains.skia.Image.makeRaster(
+                            org.jetbrains.skia.ImageInfo(frame.width(), frame.height(),
+                                org.jetbrains.skia.ColorType.BGRA_8888, org.jetbrains.skia.ColorAlphaType.OPAQUE),
+                            frame.bgra(), frame.width() * 4)
+                        if (frames.replace(image)) { received = true; revision++ }
+                    } else if (!received && System.nanoTime() - started > 15_000_000_000L) {
+                        error("video produced no CPU frames")
+                    }
+                    delay(100)
                 }
-                candidate.controller.start(stream)
-                ensureActive()
             }
-            session = opened
-        } catch (cancelled: CancellationException) {
-            opened?.controller?.let { ArtistMotionPlayers.remove(it); it.closeAsync() }
-            throw cancelled
-        } catch (error: Throwable) {
-            opened?.controller?.let { ArtistMotionPlayers.remove(it); it.closeAsync() }
-            ensureActive()
-            fail(error)
-        }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Throwable) {
+            failed = true
+            log.logOnce("motion-cpu-$url", "CPU motion failed; keeping poster: ${log.describe(error)}")
+            onFailure()
+        } finally { worker.close() }
     }
-
-    val player = session ?: return
-    LaunchedEffect(player) {
-        // The static poster remains fully visible until Skia has received an
-        // actual frame, rather than merely until the HLS metadata is available.
-        repeat(100) {
-            val available = runCatching { player.controller.hasFrame() }
-            if (available.getOrDefault(false)) {
-                ready = true
-                return@LaunchedEffect
+    androidx.compose.foundation.Canvas(modifier) {
+        revision // Repaint when a new owned CPU frame is published.
+        frames.useFrame { image ->
+            val scale = maxOf(size.width / image.width, size.height / image.height)
+            val width = image.width * scale
+            val height = image.height * scale
+            drawIntoCanvas { canvas ->
+                canvas.nativeCanvas.drawImageRect(image,
+                    org.jetbrains.skia.Rect.makeLTRB((size.width-width)/2, 0f, (size.width+width)/2, height))
             }
-            if (available.isFailure || player.controller.isClosed) {
-                fail(available.exceptionOrNull())
-                return@LaunchedEffect
-            }
-            delay(150)
         }
-        fail(IllegalStateException("video did not produce a frame within 15 seconds"))
-    }
-    if (!player.controller.isClosed) {
-        // A nonzero preparation alpha lets Skia allocate/render its first frame;
-        // alpha=0 can cause the graphics layer to skip all drawing indefinitely.
-        HostMotionSurface(player, modifier.graphicsLayer { alpha = if (ready) 1f else 0.001f }) { fail(it) }
     }
 }
 
-internal fun nativeMotionEnabled(): Boolean = false
+// Kept as a policy boundary: this now enables only CPU drawing, never the old native Surface.
+internal fun nativeMotionEnabled(): Boolean = true
 
-@OptIn(InternalComposeApi::class)
-@Composable
-private fun HostMotionSurface(session: HostMotionSession, modifier: Modifier, onFailure: (Throwable) -> Unit) {
-    // The lease is remembered before the child Surface: forgotten/abandoned
-    // children release their native render callbacks/textures before its lease.
-    val lease = remember(session.controller) { MotionSurfaceLease(session.controller) }
-    if (!lease.attached) return
-    val composer = currentComposer
-    val failure = runCatching {
-        session.surface.invoke(session.provider, session.player, modifier, composer, 0)
-    }.exceptionOrNull()
-    if (failure != null) SideEffect { onFailure(failure.cause ?: failure) }
+internal class SoftwareMotionWorker : AutoCloseable {
+    private val stopped = AtomicBoolean(false)
+    private val decoder = AtomicReference<SoftwareVideoFrames?>(null)
+    val isClosed: Boolean get() = stopped.get()
+    fun open(url: String) {
+        if (stopped.get()) return
+        ensureHostMpvLoaded()
+        if (stopped.get()) return
+        val opened = SoftwareVideoFrames(url)
+        decoder.set(opened)
+        if (stopped.get()) decoder.getAndSet(null)?.close()
+    }
+    fun read(): SoftwareVideoFrames.Frame? = if (stopped.get()) null else decoder.get()?.read()
+    override fun close() {
+        stopped.set(true)
+        decoder.getAndSet(null)?.let { opened -> motionCleanup.execute { opened.close() } }
+    }
 }
+
+@Synchronized
+private fun ensureHostMpvLoaded() {
+    if (hostMpvLoaded) return
+    // Let the existing host loader extract its bundled libraries. No Surface is created.
+    val factory = Class.forName("org.openani.mediamp.mpv.MpvMediampPlayerFactory")
+        .getConstructor().newInstance()
+    val player = factory.javaClass.getMethod("create", Any::class.java, CoroutineContext::class.java)
+        .invoke(factory, Unit, EmptyCoroutineContext)
+    (player as AutoCloseable).close()
+    hostMpvLoaded = true
+}
+private var hostMpvLoaded = false
 
 /** This boundary is also exercised without loading any host/native classes. */
 internal interface MotionBackend : AutoCloseable {
@@ -251,6 +236,11 @@ private class MotionSurfaceLease(private val controller: MotionPlaybackControlle
 /** Also called from plugin shutdown if a host composition outlives its hooks. */
 internal object ArtistMotionPlayers {
     private val players = mutableSetOf<MotionPlaybackController>()
+    private val software = mutableSetOf<SoftwareMotionWorker>()
+    @Synchronized fun addSoftware(worker: SoftwareMotionWorker): Boolean {
+        if (!active) { worker.close(); return false }; return software.add(worker)
+    }
+    @Synchronized fun removeSoftware(worker: SoftwareMotionWorker) { software.remove(worker) }
     private var epoch = 0L
     private var active = false
 
@@ -259,6 +249,8 @@ internal object ArtistMotionPlayers {
         epoch++
         players.toList().forEach(MotionPlaybackController::closeAsync)
         players.clear()
+        software.toList().forEach { it.close() }
+        software.clear()
         active = true
     }
 
@@ -281,6 +273,8 @@ internal object ArtistMotionPlayers {
         epoch++
         players.toList().forEach(MotionPlaybackController::closeAsync)
         players.clear()
+        software.toList().forEach { it.close() }
+        software.clear()
     }
 }
 
@@ -321,12 +315,13 @@ internal fun selectAppleMotionVariant(masterUrl: String, playlist: String): Stri
             if (!codec.split(',').any { it.trim().startsWith("avc1") } || (range.isNotEmpty() && range != "SDR")) continue
             val dimensions = attribute("RESOLUTION")?.split('x')?.mapNotNull(String::toLongOrNull)
             if (dimensions?.size != 2 || dimensions.any { it <= 0 || it > 8192 }) continue
+            if (dimensions[0] > 1280 || dimensions[1] > 720) continue
             val uri = runCatching { URI(masterUrl).resolve(line).toString() }.getOrNull() ?: continue
             if (!isAppleMotionUrl(uri)) continue
             candidates += Variant(uri, dimensions[0] * dimensions[1], attribute("BANDWIDTH")?.toLongOrNull() ?: Long.MAX_VALUE)
         }
     }
-    val usable = candidates.filter { it.pixels in (640L * 360)..(1280L * 720) }.ifEmpty { candidates }
+    val usable = candidates.filter { it.pixels in (480L * 270)..(960L * 540) }.ifEmpty { candidates }
     return usable.minWithOrNull(compareBy<Variant> { it.pixels }.thenBy { it.bandwidth })?.url
 }
 
@@ -352,60 +347,6 @@ private fun resolveAppleMotionStream(url: String): String {
             connection.disconnect()
         }
     }.getOrDefault(url)
-}
-
-private class HostMotionSession(
-    val player: Any,
-    val provider: Any,
-    val surface: Method,
-    val controller: MotionPlaybackController,
-) {
-    companion object {
-        fun create(): HostMotionSession {
-            val loader = HostMotionSession::class.java.classLoader
-            val factory = Class.forName("org.openani.mediamp.mpv.MpvMediampPlayerFactory", true, loader)
-                .getConstructor().newInstance()
-            val create = factory.javaClass.getMethod("create", Any::class.java, CoroutineContext::class.java)
-            val player = create.invoke(factory, Unit, EmptyCoroutineContext)
-            try {
-                val provider = Class.forName(
-                    "org.openani.mediamp.mpv.compose.MpvMediampPlayerSurfaceProvider", true, loader,
-                ).getConstructor().newInstance()
-                val surface = provider.javaClass.methods.single {
-                    it.name == "Surface" && it.parameterCount == 4 && it.parameterTypes[0].isInstance(player) &&
-                        it.parameterTypes[1] == Modifier::class.java &&
-                        it.parameterTypes[2].name == "androidx.compose.runtime.Composer" &&
-                        it.parameterTypes[3] == Int::class.javaPrimitiveType
-                }
-                val handleGetter = player.javaClass.methods.single {
-                    it.parameterCount == 0 && !JavaModifier.isStatic(it.modifiers) &&
-                        it.returnType.name.startsWith("org.openani.mediamp.mpv.") &&
-                        it.returnType.methods.any(::isMotionCommandMethod)
-                }
-                val handle = handleGetter.invoke(player)
-                val command = handle.javaClass.methods.single(::isMotionCommandMethod)
-                // The host renderer keeps the latest successfully rendered Skia
-                // image. Discover fields by type, never by obfuscated field name.
-                val rendererField = player.javaClass.declaredFields.single {
-                    it.type.declaredFields.any { field -> field.type.name == "org.jetbrains.skia.Image" }
-                }.apply { isAccessible = true }
-                val renderer = checkNotNull(rendererField.get(player)) { "host has no supported video renderer" }
-                val imageField = renderer.javaClass.declaredFields.single {
-                    it.type.name == "org.jetbrains.skia.Image"
-                }.apply { isAccessible = true }
-                val backend = object : MotionBackend {
-                    override fun command(arguments: List<String>): Boolean =
-                        command.invoke(handle, arguments.toTypedArray() as Any) as Boolean
-                    override fun hasFrame(): Boolean = imageField.get(renderer) != null
-                    override fun close() { (player as AutoCloseable).close() }
-                }
-                return HostMotionSession(player, provider, surface, MotionPlaybackController(backend))
-            } catch (error: Throwable) {
-                runCatching { (player as AutoCloseable).close() }
-                throw error
-            }
-        }
-    }
 }
 
 internal fun isMotionCommandMethod(method: Method): Boolean =

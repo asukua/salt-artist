@@ -12,6 +12,13 @@
           "default_value": true
         },
         {
+          "key": "animated_artist_hero",
+          "type": "switch",
+          "title": "动态艺人头图",
+          "summary": "使用 CPU 解码帧静音播放；关闭后显示当前静态封面",
+          "default_value": true
+        },
+        {
           "key": "dim_backdrop",
           "type": "switch",
           "title": "暗色背景",

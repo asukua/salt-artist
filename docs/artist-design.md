@@ -1,4 +1,16 @@
-# 艺人页设计：0.1.8
+# 艺人页设计：0.1.9
+
+## 0.1.9 动态渲染替换
+
+用户确认 0.1.7 开启动态头图退出、关闭则不退出，将问题定位到动态路径，但没有定位到单条 native 崩溃指令。0.1.9 移除宿主视频 Surface、反射 Composable 和共享 GPU 视频纹理接入，恢复配置开关，使用独立 libmpv C API 实例（vo=null、hwdec=no、音轨关闭）读取 screenshot-raw CPU 帧，再通过普通 Skia raster Image 绘制。主机 GPU 仍负责普通 UI 绘制，但不再接收解码器的共享纹理或跨库视频 Surface。
+
+MediaMP JNI handle 是包装对象地址，不能当作 libmpv C API handle。实现只用 mpv_create 返回的独立 handle，按 [mpv 官方 client.h](https://github.com/mpv-player/mpv/blob/master/include/mpv/client.h) 的 x64 mpv_node/map/byte-array ABI 读取、复制并释放结果；不访问 MediaMP 包装对象内部内存。宿主 factory 仅用于加载已有 native 库，随即关闭，不创建 Surface。JNA 仅 compileOnly，未打入插件。
+
+每秒最多取 10 帧，优先较小 H.264 SDR 流，像素/stride/字节数校验后复制到 JVM 数组。OwnedMotionFrame 在替换、绘制和释放间互斥；绘制方法返回后才释放旧 raster Image，关闭后晚到帧立即释放，不积累逐帧位图。解码与销毁在后台进行，窗口失焦、切页、插件停用均结束会话。
+
+隔离 probe 已取得 Gorillaz 24 张内容不同的真实 CPU 帧，并经过 Skia raster Image 编码输出 PNG，确认通道与画面正确，不再只验证播放时钟。未操作宿主应用；实际宿主动态页面仍需用户验收。证据在 build/reports/motion-research/raw-probe.log、cpu-frame.png。下文 0.1.7 的 GPU Surface 设计仅为历史，不是当前播放路径。
+
+最终生产类另完成 3 轮独立创建、取帧、销毁，每轮取得 5 帧；结果在 raw-probe-final.log。125 项自动测试及打包检查通过，新增覆盖绘制过程中禁止释放帧、替换与停用后迟到帧仅释放一次。测试、隔离 CPU 绘制验证与宿主实际验收仍分别记录。
 
 ## 0.1.8 退出问题的安全处置
 

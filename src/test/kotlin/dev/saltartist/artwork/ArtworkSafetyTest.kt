@@ -9,8 +9,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ArtworkSafetyTest {
-    @Test fun unsafeNativeSurfaceIsDisabledRegardlessOfSavedPreferences() {
-        assertFalse(nativeMotionEnabled())
+    @Test fun cpuFramePlaybackIsAvailable() {
+        assertTrue(nativeMotionEnabled())
     }
 
     @Test fun paletteReadsOnlyASubsampledImage() {
