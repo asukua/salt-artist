@@ -1,4 +1,12 @@
-# 艺人页设计：0.1.9
+# 艺人页设计：0.1.10
+
+## 0.1.10 动态头图清晰度
+
+用户确认 0.1.9 视频可以播放，但画面模糊。此前为降低 CPU 压力，HLS 策略从 480×270 到 960×540 的流中取最小尺寸，导致低清素材被放大到整个桌面头图区。现改为选择尺寸不超过 1920×1080 的最高分辨率 H.264 SDR 完整视频流，同分辨率选较高码率；没有 1080p 时选择可用的较低分辨率。继续排除 I-frame 预览、HEVC、HDR 和超出尺寸上限的流。没有显式选中 variant 时，解码器的 HLS 码率偏好由 1.5 Mbps 改为 8 Mbps。
+
+CPU 帧尺寸上限同步为 1920×1080，BGRA 单帧最多 8,294,400 字节，保留 16 MiB 原始数据校验、前后各 16 MiB 解复用缓存、10 fps 取帧及单帧所有权机制。Canvas 缩放显式使用线性采样。没有重新引入旧版共享 GPU 视频纹理；高清解码、复制成本高于旧低清策略，暂不选择 4K，以维持内存上限。
+
+127 项自动测试通过，覆盖 1080p 优先、相同尺寸按码率选择、缺少高清时退回可用流，以及预览/HDR/HEVC/4K 排除。隔离验证从实时 Gorillaz master 通过生产选择器取得 1920×1080、约 11.73 Mbps 峰值码率的 H.264 流，生产取帧类取得 24 张不同帧并编码为 PNG，另完成 3 轮关闭重开、每轮 5 帧。证据位于本地 `build/reports/motion-quality/hd-probe.log`、`hd-frame.png`。0.1.9 的宿主播放已由用户确认；本次高清版本未操作宿主界面，实际页面清晰度与性能仍待用户验收。
 
 ## 0.1.9 动态渲染替换
 
@@ -6,7 +14,7 @@
 
 MediaMP JNI handle 是包装对象地址，不能当作 libmpv C API handle。实现只用 mpv_create 返回的独立 handle，按 [mpv 官方 client.h](https://github.com/mpv-player/mpv/blob/master/include/mpv/client.h) 的 x64 mpv_node/map/byte-array ABI 读取、复制并释放结果；不访问 MediaMP 包装对象内部内存。宿主 factory 仅用于加载已有 native 库，随即关闭，不创建 Surface。JNA 仅 compileOnly，未打入插件。
 
-每秒最多取 10 帧，优先较小 H.264 SDR 流，像素/stride/字节数校验后复制到 JVM 数组。OwnedMotionFrame 在替换、绘制和释放间互斥；绘制方法返回后才释放旧 raster Image，关闭后晚到帧立即释放，不积累逐帧位图。解码与销毁在后台进行，窗口失焦、切页、插件停用均结束会话。
+每秒最多取 10 帧，H.264 SDR 流选择已由 0.1.10 改为上文的清晰度策略，像素/stride/字节数校验后复制到 JVM 数组。OwnedMotionFrame 在替换、绘制和释放间互斥；绘制方法返回后才释放旧 raster Image，关闭后晚到帧立即释放，不积累逐帧位图。解码与销毁在后台进行，窗口失焦、切页、插件停用均结束会话。
 
 隔离 probe 已取得 Gorillaz 24 张内容不同的真实 CPU 帧，并经过 Skia raster Image 编码输出 PNG，确认通道与画面正确，不再只验证播放时钟。未操作宿主应用；实际宿主动态页面仍需用户验收。证据在 build/reports/motion-research/raw-probe.log、cpu-frame.png。下文 0.1.7 的 GPU Surface 设计仅为历史，不是当前播放路径。
 

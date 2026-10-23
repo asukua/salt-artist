@@ -143,13 +143,43 @@ class ArtistMotionPlayerTest {
             hevc.m3u8
             #EXT-X-STREAM-INF:CODECS="avc1.640028",RESOLUTION=1920x1080,VIDEO-RANGE=SDR,BANDWIDTH=5000000
             fullhd.m3u8
+            #EXT-X-STREAM-INF:CODECS="avc1.640033",RESOLUTION=3840x2160,VIDEO-RANGE=SDR,BANDWIDTH=15000000
+            ultra.m3u8
             #EXT-X-STREAM-INF:CODECS="avc1.64001f,mp4a.40.2",RESOLUTION=1024x576,VIDEO-RANGE=SDR,BANDWIDTH=2000000
             preferred.m3u8
             #EXT-X-STREAM-INF:CODECS="avc1.64001f",RESOLUTION=1280x720,VIDEO-RANGE=PQ,BANDWIDTH=1000000
             hdr.m3u8
         """.trimIndent()
-        assertEquals("https://mvod.itunes.apple.com/music/preferred.m3u8", selectAppleMotionVariant(master, playlist))
+        assertEquals("https://mvod.itunes.apple.com/music/fullhd.m3u8", selectAppleMotionVariant(master, playlist))
         assertEquals(null, selectAppleMotionVariant(master, "#EXTM3U\n#EXT-X-MAP:URI=\"track.mp4\"\n#EXTINF:3\ntrack.mp4"))
+    }
+
+    @Test
+    fun hlsSelectionPrefersFullHdThenHigherBitrateRegardlessOfPlaylistOrder() {
+        val master = "https://mvod.itunes.apple.com/music/master.m3u8"
+        val variants = listOf(
+            "#EXT-X-STREAM-INF:CODECS=\"avc1.640028\",RESOLUTION=1920x1080,BANDWIDTH=5000000\nhd-low.m3u8",
+            "#EXT-X-STREAM-INF:CODECS=\"avc1.640028\",RESOLUTION=1920x1080,BANDWIDTH=8000000\nhd-high.m3u8",
+            "#EXT-X-STREAM-INF:CODECS=\"avc1.64001f\",RESOLUTION=480x270,BANDWIDTH=300000\nsmall.m3u8",
+            "#EXT-X-STREAM-INF:CODECS=\"avc1.640028\",RESOLUTION=1920x1080\nhd-unknown.m3u8",
+        )
+        for (ordered in listOf(variants, variants.reversed())) {
+            assertEquals("https://mvod.itunes.apple.com/music/hd-high.m3u8",
+                selectAppleMotionVariant(master, "#EXTM3U\n" + ordered.joinToString("\n")))
+        }
+    }
+
+    @Test
+    fun hlsSelectionUsesBestAvailableLowerResolutionWhenFullHdIsAbsent() {
+        val master = "https://mvod.itunes.apple.com/music/master.m3u8"
+        val playlist = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:CODECS="avc1.64001f",RESOLUTION=1280x720,BANDWIDTH=4000000
+            best.m3u8
+            #EXT-X-STREAM-INF:CODECS="avc1.64001f",RESOLUTION=480x270,BANDWIDTH=300000
+            small.m3u8
+        """.trimIndent()
+        assertEquals("https://mvod.itunes.apple.com/music/best.m3u8", selectAppleMotionVariant(master, playlist))
     }
 
     @Test

@@ -88,7 +88,9 @@ internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog
             val height = image.height * scale
             drawIntoCanvas { canvas ->
                 canvas.nativeCanvas.drawImageRect(image,
-                    org.jetbrains.skia.Rect.makeLTRB((size.width-width)/2, 0f, (size.width+width)/2, height))
+                    org.jetbrains.skia.Rect.makeWH(image.width.toFloat(), image.height.toFloat()),
+                    org.jetbrains.skia.Rect.makeLTRB((size.width-width)/2, 0f, (size.width+width)/2, height),
+                    org.jetbrains.skia.SamplingMode.LINEAR, null, true)
             }
         }
     }
@@ -296,7 +298,7 @@ private val motionCleanup = ThreadPoolExecutor(
     } },
 )
 
-/** Prefer an ordinary H.264 SDR stream, never Apple's I-frame preview playlist. */
+/** Highest full-HD H.264 SDR stream; preview playlists and larger frames stay excluded. */
 internal fun selectAppleMotionVariant(masterUrl: String, playlist: String): String? {
     data class Variant(val url: String, val pixels: Long, val bandwidth: Long)
     val candidates = mutableListOf<Variant>()
@@ -315,14 +317,16 @@ internal fun selectAppleMotionVariant(masterUrl: String, playlist: String): Stri
             if (!codec.split(',').any { it.trim().startsWith("avc1") } || (range.isNotEmpty() && range != "SDR")) continue
             val dimensions = attribute("RESOLUTION")?.split('x')?.mapNotNull(String::toLongOrNull)
             if (dimensions?.size != 2 || dimensions.any { it <= 0 || it > 8192 }) continue
-            if (dimensions[0] > 1280 || dimensions[1] > 720) continue
+            if (dimensions[0] > SoftwareVideoFrames.MAX_WIDTH || dimensions[1] > SoftwareVideoFrames.MAX_HEIGHT) continue
             val uri = runCatching { URI(masterUrl).resolve(line).toString() }.getOrNull() ?: continue
             if (!isAppleMotionUrl(uri)) continue
-            candidates += Variant(uri, dimensions[0] * dimensions[1], attribute("BANDWIDTH")?.toLongOrNull() ?: Long.MAX_VALUE)
+            candidates += Variant(uri, dimensions[0] * dimensions[1],
+                attribute("BANDWIDTH")?.toLongOrNull()?.coerceAtLeast(0) ?: 0)
         }
     }
-    val usable = candidates.filter { it.pixels in (480L * 270)..(960L * 540) }.ifEmpty { candidates }
-    return usable.minWithOrNull(compareBy<Variant> { it.pixels }.thenBy { it.bandwidth })?.url
+    // The old smallest-first policy enlarged 480x270 video across a desktop hero.
+    // Resolution wins; for equal dimensions use the less compressed rendition.
+    return candidates.maxWithOrNull(compareBy<Variant> { it.pixels }.thenBy { it.bandwidth })?.url
 }
 
 private fun resolveAppleMotionStream(url: String): String {

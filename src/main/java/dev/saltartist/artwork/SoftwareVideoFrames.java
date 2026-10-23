@@ -5,6 +5,8 @@ import java.util.HashMap;
 
 /** Copies a CPU-owned screenshot before freeing the mpv result; no GPU handles are shared. */
 public final class SoftwareVideoFrames implements AutoCloseable {
+    public static final int MAX_WIDTH = 1920;
+    public static final int MAX_HEIGHT = 1080;
     private final Pointer handle;
     private final Function command, free;
     private final NativeLibrary library;
@@ -22,7 +24,7 @@ public final class SoftwareVideoFrames implements AutoCloseable {
                 {"mute","yes"},{"volume","0"},{"loop-file","inf"},{"force-window","no"},
                 {"audio-file-auto","no"},{"sub-auto","no"},{"osd-level","0"},
                 {"vd-lavc-threads","2"},{"network-timeout","8"},{"demuxer-max-bytes","16777216"},
-                {"demuxer-max-back-bytes","16777216"},{"hls-bitrate","1500000"}};
+                {"demuxer-max-back-bytes","16777216"},{"hls-bitrate","8000000"}};
             Function set=library.getFunction("mpv_set_option_string");
             for(String[] option:options) if(set.invokeInt(new Object[]{handle,option[0],option[1]})<0)
                 throw new IllegalStateException("mpv rejected "+option[0]);
@@ -49,7 +51,7 @@ public final class SoftwareVideoFrames implements AutoCloseable {
                 var nodes = new HashMap<String, Pointer>();
                 for (int i=0; i<count; i++) nodes.put(keys.getPointer(i*8L).getString(0,"UTF-8"), values.share(i*16L));
                 int width = integer(nodes.get("w")), height = integer(nodes.get("h")), stride = integer(nodes.get("stride"));
-                if (width<1 || height<1 || width>1280 || height>720 || stride<width*4 || stride>1280*8)
+                if (width<1 || height<1 || width>MAX_WIDTH || height>MAX_HEIGHT || stride<width*4 || stride>MAX_WIDTH*8)
                     throw new IllegalStateException("Frame exceeds CPU buffer limits");
                 Pointer formatNode = nodes.get("format");
                 if (formatNode == null || formatNode.getInt(8)!=1) throw new IllegalStateException("Missing pixel format");

@@ -67,7 +67,7 @@
 
 `apple_music_storefronts` 控制 Apple Music 地区重试顺序，默认 `US,JP,CN`，可自定义最多 8 个有效地区代码。默认顺序下 US 请求失败会先尝试 CN、再 JP，并暂避 US；资料语言仍由单独的语言设置决定。同名候选出现不同艺人 ID 时继续拒绝自动选择。
 
-0.1.9 恢复动态头图开关，改用 CPU 解码帧与普通图片绘制，不再调用宿主视频 Surface 或共享 GPU 纹理。关闭后显示当前静态封面；切页、失焦或滚出头图区后停止，音乐播放队列不受影响。图片取色使用缩略图，内存缓存有数量限制。
+动态头图使用 CPU 解码帧与普通图片绘制，不调用宿主视频 Surface 或共享 GPU 纹理。0.1.10 优先选择最高 1080p 的 H.264 SDR 视频，同分辨率选择更高码率，避免低清视频放大发糊。关闭后显示当前静态封面；切页、失焦或滚出头图区后停止，音乐播放队列不受影响。图片取色使用缩略图，内存缓存有数量限制。
 
 ## 开发
 
@@ -77,7 +77,7 @@
 ./gradlew test plugin
 ```
 
-Windows PowerShell 使用 `.\gradlew.bat test plugin`。产物位于 `build/libs/plugin-dev.saltartist-0.1.9.spmod`。首次构建需要联网获取依赖。
+Windows PowerShell 使用 `.\gradlew.bat test plugin`。产物位于 `build/libs/plugin-dev.saltartist-0.1.10.spmod`。首次构建需要联网获取依赖。
 
 插件使用 Kotlin 与 Compose Multiplatform，运行时由宿主提供。接入、权限与反射约束见 [兼容记录](docs/host-compatibility.md)，身份匹配、缓存与列表 Hook 的取舍见 [设计文档](docs/artist-design.md)。
 
