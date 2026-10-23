@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.saltartist"
-version = "0.1.6"
+version = "0.1.7"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_25
@@ -34,6 +34,10 @@ dependencies {
     compileOnly(libs.compose.runtime)
     compileOnly("org.jetbrains.compose.material:material:1.12.1")
     testImplementation(kotlin("test"))
+    testImplementation("com.github.Moriafly.spw-workshop-api:spw-workshop-api:${libs.versions.workshop.get()}") {
+        // ConfigHelper contract tests need the API, without the host's UI/native runtime.
+        isTransitive = false
+    }
     testImplementation(libs.compose.ui) {
         // Palette tests use color math only; no native renderer is needed.
         exclude(group = "org.jetbrains.skiko")

@@ -27,6 +27,7 @@ import com.xuncorp.spw.workshop.api.config.ConfigHelper
 import com.xuncorp.spw.workshop.api.hook.HookHandle
 import dev.saltartist.am.AppleMusicCatalog
 import dev.saltartist.artwork.ArtworkStore
+import dev.saltartist.artwork.ArtistMotionPlayers
 import dev.saltartist.bridge.HostReflection
 import dev.saltartist.bridge.ArtistDirectoryBridge
 import dev.saltartist.bridge.NavigationBridge
@@ -76,6 +77,7 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
             return
         }
         log.log("host profile=$hostVersion page=${targets.artistPageClass} viewModel=${targets.artistViewModelClass} avatar=${targets.artistAvatarClass}")
+        ArtistMotionPlayers.begin()
         // 权限状态只记录不拦截：真正的判定交给 afterComposable 抛出的
         // PluginPermissionDeniedException，这样宿主策略变化时日志能给出准确原因。
         val classTransform = runCatching {
@@ -196,6 +198,7 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
     }
 
     override fun stop() {
+        ArtistMotionPlayers.closeAll()
         directoryHandles.forEach { handle ->
             runCatching { handle.unhook() }.onFailure { log.log("directory unhook failed: ${log.describe(it)}") }
         }

@@ -49,6 +49,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.xuncorp.spw.workshop.api.WorkshopApi
 import dev.saltartist.artwork.ArtworkPalette
+import dev.saltartist.artwork.ArtistMotionSurface
 import dev.saltartist.data.ArtistAlbum
 import dev.saltartist.data.ArtistPageModel
 import dev.saltartist.data.ArtistTrack
@@ -78,6 +79,9 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
     val amArt = deps.artwork.appleArt(artistName, settings.languagePolicy, settings.identityPolicy)
     val artwork = resolvedArtwork ?: amArt?.hero ?: deps.artwork.cover(rawModel.heroTrackId)
     val palette = artwork?.palette ?: ArtworkPalette.Fallback
+    val motion = amArt?.motion?.takeIf {
+        settings.animatedHero && customPhoto == null && artwork != null && artwork === amArt.hero
+    }
     val logoFile = remember(artistName, revision) { deps.profiles.logoPath(artistName) }
     val customLogoBitmap = deps.artwork.localLogo(logoFile)
     val listState = rememberLazyListState()
@@ -90,6 +94,7 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
     var editorOpen by remember(artistName) { mutableStateOf(false) }
     var infoOpen by remember(artistName) { mutableStateOf(false) }
     var logoEditorOpen by remember(artistName) { mutableStateOf(false) }
+    var matcherOpen by remember(artistName) { mutableStateOf(false) }
     var currentTrackId by remember(artistName) { mutableStateOf("") }
 
     LaunchedEffect(artistName) {
@@ -203,6 +208,9 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
                     onInfo = { infoOpen = true },
                     onPlay = { playAt(0) },
                     onToggleFavorite = ::toggleFavorite,
+                    motionContent = motion?.let { clip ->
+                        { modifier -> ArtistMotionSurface(clip.url, modifier, deps.log) }
+                    },
                 )
             }
             item(key = "catalogue") {
@@ -243,6 +251,16 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
             onCustomHero = ::customHero,
             onRefreshHero = ::refreshHero,
             onCustomLogo = { logoEditorOpen = true },
+            onMatchArtist = { matcherOpen = true },
+        )
+        if (matcherOpen) ArtistMatcher(artistName, palette, deps,
+            onClose = { matcherOpen = false },
+            onChanged = {
+                deps.artwork.invalidateArtist(artistName)
+                deps.profiles.revision.value++
+                matcherOpen = false
+                toast("已更新 Apple Music 匹配")
+            },
         )
         if (infoOpen) ArtistInfo(model, palette, amArt?.avatar, amArt?.details) { infoOpen = false }
         if (logoEditorOpen) ArtistLogoEditor(
@@ -279,6 +297,7 @@ private fun ArtistToolbar(
     onCustomHero: () -> Unit,
     onRefreshHero: () -> Unit,
     onCustomLogo: () -> Unit,
+    onMatchArtist: () -> Unit,
 ) {
     var menuOpen by remember(title) { mutableStateOf(false) }
     LaunchedEffect(isScrolling) { if (isScrolling) menuOpen = false }
@@ -329,6 +348,7 @@ private fun ArtistToolbar(
                         "艺人信息" to onInfo,
                         "复制艺人信息" to onShare,
                         "随机播放" to onShuffle,
+                        "匹配 Apple Music 艺人" to onMatchArtist,
                         "编辑艺人" to onEdit,
                         "更换头图" to onCustomHero,
                         "刷新头图" to onRefreshHero,
@@ -349,10 +369,11 @@ private fun ArtistToolbar(
                                     0 -> InfoGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
                                     1 -> CopyGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
                                     2 -> ShuffleGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    3 -> EditGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    4 -> PhotoGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    5 -> RefreshGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    6 -> LetterGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
+                                    3 -> SearchGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
+                                    4 -> EditGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
+                                    5 -> PhotoGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
+                                    6 -> RefreshGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
+                                    7 -> LetterGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
                                 }
                             }
                         }

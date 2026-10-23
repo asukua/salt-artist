@@ -66,11 +66,11 @@ class ArtistIdentityTest {
         val before = urls.size
         assertNull(resolver.resolve("Solo Artist", enabled))
         assertEquals(before, urls.size, "Ambiguous results should be cached briefly")
-        assertEquals("42", resolver.resolve("Solo Artist", strict))
+        assertEquals("43", resolver.resolve("Solo Artist", strict))
     }
 
     @Test
-    fun unknownStorefrontsCannotConfirmUniquenessButValidEmptyResultsCan() {
+    fun unavailableStorefrontsDoNotBlockACompleteMatchInAnotherRegion() {
         for (unavailable in listOf(null, "{broken", "{\"results\":{}}")) {
             val resolver = ArtistIdentityResolver({ url ->
                 when {
@@ -79,7 +79,7 @@ class ArtistIdentityTest {
                     else -> "{\"results\":[]}"
                 }
             }, log)
-            assertNull(resolver.resolve("Solo Artist", enabled))
+            assertEquals("42", resolver.resolve("Solo Artist", enabled))
             assertEquals("42", resolver.resolve("Solo Artist", strict))
         }
         val available = ArtistIdentityResolver({ url ->
@@ -170,7 +170,7 @@ class ArtistIdentityTest {
         assertNotEquals(enabled.artistCacheKey("AC/DC"), enabled.artistCacheKey("AC DC"))
         assertNotEquals(enabled.artistCacheKey("G.E.M."), enabled.artistCacheKey("GEM"))
         assertNotEquals(enabled.cacheToken, ArtistIdentityPolicy(overrides = "Name=42").cacheToken)
-        assertEquals("strict-v1", ArtistIdentityPolicy(false, "Name=42").cacheToken)
+        assertEquals(strict.cacheToken, ArtistIdentityPolicy(false, "Name=42").cacheToken)
         assertNotEquals(strict.artistCacheKey("AC/DC"), strict.artistCacheKey("AC DC"))
         assertEquals(strict.artistCacheKey("Name"), ArtistIdentityPolicy(false, "Name=42").artistCacheKey("Name"))
         assertFalse(enabled.artistCacheKey("A/B").contains('/'))

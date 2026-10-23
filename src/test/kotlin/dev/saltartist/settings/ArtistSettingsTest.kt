@@ -17,6 +17,8 @@ class ArtistSettingsTest {
         assertTrue(settings.favoritesFirst)
         assertTrue(settings.recognizeAliases)
         assertEquals("", settings.artistIdentityOverrides)
+        assertEquals(listOf("US", "JP", "CN"), settings.identityPolicy.storefrontOrder)
+        assertTrue(settings.animatedHero)
     }
 
     @Test
@@ -27,12 +29,16 @@ class ArtistSettingsTest {
             ArtistSettings.KEY_FAVORITES_FIRST to false,
             ArtistSettings.KEY_ALIASES to false,
             ArtistSettings.KEY_IDENTITY_OVERRIDES to "初音未来=307078957",
+            ArtistSettings.KEY_STOREFRONTS to "CN,US,JP",
+            ArtistSettings.KEY_ANIMATED_HERO to false,
         ))
         assertEquals(PreferredArtistLanguage.ENGLISH, settings.languagePolicy.preferredLanguage)
         assertFalse(settings.languagePolicy.showOtherLanguages)
         assertFalse(settings.favoritesFirst)
         assertFalse(settings.identityPolicy.enabled)
         assertEquals("初音未来=307078957", settings.artistIdentityOverrides)
+        assertEquals(listOf("CN", "US", "JP"), settings.identityPolicy.storefrontOrder)
+        assertFalse(settings.animatedHero)
         assertEquals(PreferredArtistLanguage.JAPANESE,
             artistSettingsFromValues(mapOf(ArtistSettings.KEY_LANGUAGE to "ja-JP")).preferredLanguage)
     }
@@ -45,12 +51,16 @@ class ArtistSettingsTest {
             ArtistSettings.KEY_FAVORITES_FIRST to 0,
             ArtistSettings.KEY_ALIASES to "false",
             ArtistSettings.KEY_IDENTITY_OVERRIDES to listOf("not a string"),
+            ArtistSettings.KEY_STOREFRONTS to 123,
+            ArtistSettings.KEY_ANIMATED_HERO to "false",
         ))
         assertEquals(PreferredArtistLanguage.CHINESE, settings.preferredLanguage)
         assertTrue(settings.showOtherLanguages)
         assertTrue(settings.favoritesFirst)
         assertTrue(settings.recognizeAliases)
         assertEquals("", settings.artistIdentityOverrides)
+        assertEquals(listOf("US", "JP", "CN"), settings.identityPolicy.storefrontOrder)
+        assertTrue(settings.animatedHero)
     }
 
     @Test

@@ -25,6 +25,12 @@
 
 播放使用 `PlaybackController.setPlaybackQueue`。专辑点击直接播放整张：手工以名称构造 `AlbumContent` 曾导航成功却只显示空白页，需取得可靠的宿主 Album 实体来源并验证后，才能恢复专辑导航。
 
+## 动态头图运行时约束
+
+0.1.7 动态头图尝试通过延迟反射复用宿主 mediamp/mpv 播放器与 Compose surface，不把宿主播放器类或解码器打入插件。它使用独立、静音、循环的会话，不调用音乐播放队列；宿主缺类、ABI 不符、网络或解码失败时保留当前 poster。
+
+会话必须在头图离开可播放范围、窗口失焦、切换艺人、关闭动画或停用插件后释放。当前实现将视频放入头图相同的渐隐和裁剪层，并等待真实帧就绪；这些约束需要独立的 runtime harness 和宿主交互分别验证。既有 Hook class 的字节码复核不覆盖新播放器桥，不能据此宣称所有已登记宿主均已完成动态头图运行验收。素材解析与缓存见 [设计记录](artist-design.md#当前-poster-与动态头图)。
+
 ## 权限与打包
 
 编译期 Workshop Gradle 插件与 API 为 dev22，宿主 1.19.1 / 1.19.2 内 API 为 dev23；编译通过不能替代宿主联动验证。Kotlin、Compose 与 Workshop API 使用 `compileOnly`，由宿主提供运行时。
@@ -63,7 +69,9 @@ python scripts/verify-host.py --jar $env:SPW_JAR --java-home $env:JAVA_HOME --ou
 
 ## 验证范围
 
-0.1.6 已通过 81 项自动测试及 `test plugin` 构建，覆盖逐版兼容映射、身份、语言缓存、配置、添加时间查询与真实 Compose interval builder。安装包根目录与 `classes/` 的 Manifest 已核对版本和权限一致。旧版 0.1.1/0.1.2 曾在 Steam 1.19.1 验证页面渲染、菜单、滚动、播放、返回及停用恢复；本轮未操作宿主界面，1.19.2 的渲染与交互仍由用户手动验收。
+0.1.7 的地区策略、交互式匹配、动态素材与播放 harness 仍在统一验证，当前没有本轮最终测试数量或宿主 UI 通过结论。0.1.6 曾通过 81 项自动测试及 `test plugin` 构建，包根与 `classes/` 的 Manifest 版本和权限一致；该历史结果覆盖逐版兼容映射、身份、语言缓存、配置、添加时间查询与真实 Compose interval builder，不能替代新增播放器桥的验证。
+
+旧版 0.1.1/0.1.2 曾在 Steam 1.19.1 验证页面渲染、菜单、滚动、播放、返回及停用恢复；0.1.7 未操作宿主界面，1.19.2 的渲染与交互仍由用户手动验收。
 
 列表增强依赖 Compose 内部契约，具体证据与守卫见 [设计记录](artist-design.md)。窗口缩放、深浅色、快速切艺人、缺图、大量曲目及不同宿主渠道仍需运行验证。Release 包与校验文件以 [Releases](https://github.com/asukua/salt-artist/releases) 为准。
 

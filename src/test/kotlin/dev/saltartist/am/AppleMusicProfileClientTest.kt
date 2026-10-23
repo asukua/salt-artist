@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class AppleMusicProfileClientTest {
     @Test
@@ -63,6 +64,41 @@ class AppleMusicProfileClientTest {
         assertEquals(publicBearer, AppleMusicProfileClient.publicBearerFromBundle(bundle, now))
         assertNull(AppleMusicProfileClient.publicBearerFromBundle("""const example="$unrelated";""", now))
         assertNull(AppleMusicProfileClient.publicBearerFromBundle(bundle.replace(publicBearer, fakeBearer(1)), now))
+    }
+
+    @Test
+    fun profileFactsRetryRegionsWhileKeepingLanguageAndArtistIdFixed() {
+        val requests = arrayListOf<String>()
+        val details = AppleMusicProfileClient.resolveProfiles("42", PreferredArtistLanguage.ENGLISH, true, listOf("US", "TW", "HK")) { url ->
+            requests += url
+            when {
+                "/catalog/us/" in url -> null
+                "/catalog/tw/" in url -> "{\"data\":[{\"id\":\"99\",\"type\":\"artists\",\"attributes\":{\"origin\":\"Wrong artist\"}}]}"
+                else -> "{\"data\":[{\"id\":\"42\",\"type\":\"artists\",\"attributes\":{\"origin\":\"Hong Kong\"}}]}"
+            }
+        }
+        assertEquals("Hong Kong", assertNotNull(details).origin)
+        assertEquals("https://music.apple.com/hk/artist/42?l=en-US", details.sourceUrl)
+        assertEquals(3, requests.size)
+        assertTrue(requests.all { "/artists/42?" in it && "l=en-US" in it })
+    }
+
+    @Test
+    fun profileRetriesReuseSharedHealthWithoutTreatingEmptyArtistDataAsTransportFailure() {
+        val health = ArtistStorefrontHealth { 1L }
+        health.unavailable("US", listOf("US", "JP", "CN"))
+        val requests = arrayListOf<String>()
+        val facts = "{\"data\":[{\"id\":\"42\",\"type\":\"artists\",\"attributes\":{\"origin\":\"中国台湾\"}}]}"
+        assertNotNull(AppleMusicProfileClient.resolveProfiles("42", PreferredArtistLanguage.CHINESE, false, listOf("US", "JP", "CN"), health) { url -> requests += url; facts })
+        assertTrue(requests.single().contains("/catalog/cn/"))
+        requests.clear()
+        val healthy = ArtistStorefrontHealth { 1L }
+        assertNotNull(AppleMusicProfileClient.resolveProfiles("42", PreferredArtistLanguage.CHINESE, false, listOf("US", "JP", "CN"), healthy) { url ->
+            requests += url
+            if ("/catalog/us/" in url) "{\"data\":[]}" else facts
+        })
+        assertTrue(requests[0].contains("/catalog/us/"))
+        assertTrue(requests[1].contains("/catalog/jp/"))
     }
 
     private fun fakeBearer(expirySeconds: Long): String {

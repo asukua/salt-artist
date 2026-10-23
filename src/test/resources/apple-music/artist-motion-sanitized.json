@@ -1,0 +1,39 @@
+{
+  "data": [{
+    "intent": {"$kind": "ArtistDetailPageIntent", "contentDescriptor": {"kind": "artist", "identifiers": {"storeAdamID": "42"}}},
+    "data": {
+      "canonicalURL": "https://music.apple.com/us/artist/test/42",
+      "sections": [{
+        "itemKind": "artistDetailHeader",
+        "items": [{
+          "id": "42", "title": "Synthetic Motion Artist",
+          "contentDescriptor": {"kind": "artist", "identifiers": {"storeAdamID": "42"}},
+          "wideArtwork": {"dictionary": {"url": "https://is1-ssl.mzstatic.com/image/thumb/test/legacy-wide/{w}x{h}{c}.{f}"}, "cropStyle": "bb"},
+          "artwork": {"dictionary": {"url": "https://is1-ssl.mzstatic.com/image/thumb/test/avatar/{w}x{h}{c}.{f}"}, "cropStyle": "sr"},
+          "wideVideoArtwork": {
+            "dictionary": {
+              "motionArtistFullscreen16x9": {
+                "previewFrame": {"url": "https://is1-ssl.mzstatic.com/image/thumb/test/fullscreen-poster/{w}x{h}{c}.{f}"},
+                "video": "https://mvod.itunes.apple.com/test/fullscreen-master.m3u8"
+              },
+              "motionArtistWide16x9": {
+                "previewFrame": {"url": "https://is1-ssl.mzstatic.com/image/thumb/test/wide-poster/{w}x{h}{c}.{f}"},
+                "video": "https://mvod.itunes.apple.com/test/wide-master.m3u8"
+              }
+            }, "cropStyle": "sr"
+          },
+          "videoArtwork": {"dictionary": {"motionArtistSquare1x1": {
+            "previewFrame": {"url": "https://is1-ssl.mzstatic.com/image/thumb/test/square-poster/{w}x{h}{c}.{f}"},
+            "video": "https://video-ssl.itunes.apple.com/test/square.mp4"
+          }}, "cropStyle": "bb"}
+        }]
+      }, {
+        "itemKind": "bubbleLockup", "items": [{
+          "id": "999", "wideVideoArtwork": {"dictionary": {"motionArtistFullscreen16x9": {
+            "video": "https://mvod.itunes.apple.com/test/recommendation.m3u8"
+          }}}
+        }]
+      }]
+    }
+  }]
+}

@@ -19,7 +19,8 @@ class AppleMusicCatalog(
     private val memory = ConcurrentHashMap<String, AmArtist>()
     private data class AvatarHit(val metadata: AvatarMetadata?, val checkedAt: Long)
     private val avatars = ConcurrentHashMap<String, AvatarHit>()
-    private val identities = ArtistIdentityResolver(::httpGet, log)
+    private val storefrontHealth = ArtistStorefrontHealth()
+    private val identities = ArtistIdentityResolver(::httpGet, log, storefrontHealth)
     @Volatile private var loaded = false
 
     @Synchronized
@@ -66,6 +67,10 @@ class AppleMusicCatalog(
         return selectLanguageRecord(records(identity.artistCacheKey(artistName)), policy)
     }
 
+    /** Blocking manual search: callers display candidates and persist only an explicit choice. */
+    fun searchCandidates(query: String, identity: ArtistIdentityPolicy = STRICT_IDENTITY): List<ArtistMatchCandidate> =
+        identities.searchCandidates(query, identity)
+
     fun forget(artistName: String): Boolean {
         ensureLoaded()
         val base = normalizeArtistKey(artistName)
@@ -106,7 +111,7 @@ class AppleMusicCatalog(
         for (language in languages) {
             val hit = memory[cacheKey(base, language)]
             if (hit == null || !AppleMusicCache.isFresh(hit, now, maxAgeMs)) {
-                loadLanguage(artistName, base, artistId, language, now)
+                loadLanguage(artistName, base, artistId, language, now, identity)
             }
             val selected = selectLanguageRecord(records(base), policy)
             if (selected?.details?.biography != null && AppleMusicCache.isFresh(selected, now, maxAgeMs)) break
@@ -122,17 +127,13 @@ class AppleMusicCatalog(
         resolve(artistName, ArtistLanguagePolicy(), maxAgeMs, identity)
 
     private fun loadLanguage(name: String, base: String, artistId: String,
-                             language: PreferredArtistLanguage, now: Long) {
+                             language: PreferredArtistLanguage, now: Long, identity: ArtistIdentityPolicy) {
         val pages = arrayListOf<AmArtist>()
         var firstHtml: String? = null
-        val stores = when (language) {
-            PreferredArtistLanguage.CHINESE -> listOf("cn", "us", "jp")
-            PreferredArtistLanguage.ENGLISH -> listOf("us")
-            PreferredArtistLanguage.JAPANESE -> listOf("jp")
-        }
-        for (store in stores) {
+        for (country in storefrontHealth.attempts(identity.storefrontOrder)) {
+            val store = country.lowercase(java.util.Locale.ROOT)
             val link = "https://music.apple.com/$store/artist/$artistId?l=${language.code}"
-            val html = httpGet(link) ?: continue
+            val html = httpGet(link, identity.storefrontOrder) ?: continue
             val parsed = AppleMusicPageParser.parseHtml(html, artistId, link, now, language, true) ?: continue
             if (firstHtml == null) firstHtml = html
             val details = parsed.details
@@ -152,7 +153,8 @@ class AppleMusicCatalog(
         }
         if (pages.isEmpty()) return
         val profile = if (profileLoader != null) profileLoader.invoke(artistId, firstHtml, log, language)
-            else AppleMusicProfileClient.resolve(artistId, firstHtml, log, language, allowOtherLanguages = true)
+            else AppleMusicProfileClient.resolve(artistId, firstHtml, log, language, allowOtherLanguages = true,
+                storefronts = identity.storefrontOrder, health = storefrontHealth)
         val old = memory[cacheKey(base, language)]
         memory[cacheKey(base, language)] = mergePages(pages, old, now, profile).let { merged ->
             val incidentalBio = old?.takeIf { it.detailsFetchedAt == 0L }?.details?.takeIf { !it.biography.isNullOrBlank() }
@@ -178,10 +180,11 @@ class AppleMusicCatalog(
         val id = records(base).values.firstOrNull()?.artistId
             ?: identities.resolve(artistName, identity)
         if (id == null) { avatars[base] = AvatarHit(null, now); return null }
-        val link = "https://music.apple.com/cn/artist/$id?l=zh-Hans"
-        val html = httpGet(link)
-        val parsed = html?.let { AppleMusicPageParser.parseHtml(it, id, link, now) }
-        val metadata = parsed?.avatarTemplate?.let { AvatarMetadata(id, it, parsed.avatarCrop) }
+        val metadata = storefrontHealth.attempts(identity.storefrontOrder).firstNotNullOfOrNull { country ->
+            val link = "https://music.apple.com/${country.lowercase(java.util.Locale.ROOT)}/artist/$id?l=zh-Hans"
+            val parsed = httpGet(link, identity.storefrontOrder)?.let { AppleMusicPageParser.parseHtml(it, id, link, now) }
+            parsed?.avatarTemplate?.let { AvatarMetadata(id, it, parsed.avatarCrop) }
+        }
         avatars[base] = AvatarHit(metadata, now)
         if (metadata != null) {
             // Persist only the verified avatar metadata. A later artist-page resolve
@@ -217,11 +220,15 @@ class AppleMusicCatalog(
         if (old.avatarTemplate != current.avatarTemplate || old.avatarCrop != current.avatarCrop) avatarFile(artistName, identity)?.delete()
     }
 
-    private fun httpGet(url: String): String? {
+    private fun httpGet(url: String): String? = httpGet(url, null)
+
+    private fun httpGet(url: String, regions: List<String>?): String? {
         if (pageLoader != null) return pageLoader.invoke(url)
         return runCatching {
             val connection = URI(url).toURL().openConnection() as HttpURLConnection
-            connection.connectTimeout = 8000; connection.readTimeout = 12000
+            val catalogSearch = url.startsWith("https://itunes.apple.com/")
+            connection.connectTimeout = if (catalogSearch) 3500 else 8000
+            connection.readTimeout = if (catalogSearch) 6000 else 12000
             connection.instanceFollowRedirects = true
             connection.setRequestProperty("User-Agent", USER_AGENT)
             connection.setRequestProperty("Accept-Language", when {
@@ -233,14 +240,17 @@ class AppleMusicCatalog(
                 if (connection.responseCode !in 200..299) return null
                 connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             } finally { connection.disconnect() }
-        }.onFailure { log.log("apple-music http failed $url: ${it.javaClass.simpleName}") }.getOrNull()
+        }.onFailure {
+            if (regions != null && url.startsWith("https://music.apple.com/us/")) storefrontHealth.unavailable("US", regions)
+            log.log("apple-music http failed $url: ${it.javaClass.simpleName}")
+        }.getOrNull()
     }
 
     companion object {
         private val STRICT_IDENTITY = ArtistIdentityPolicy(enabled = false)
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
         private const val CACHE_TTL_MS = 30L * 24 * 60 * 60 * 1000
-        private const val AVATAR_RETRY_MS = 15L * 60 * 1000
+        private const val AVATAR_RETRY_MS = 60_000L
         private fun cacheKey(base: String, language: PreferredArtistLanguage) = "$base|${language.code}"
 
         internal fun selectLanguageRecord(records: Map<PreferredArtistLanguage, AmArtist>, policy: ArtistLanguagePolicy): AmArtist? {
@@ -267,8 +277,10 @@ class AppleMusicCatalog(
             val first = pages.first()
             require(pages.all { it.artistId == first.artistId } && (previous == null || previous.artistId == first.artistId))
             val verifiedPrevious = previous?.takeIf { it.detailsFetchedAt > 0L }
-            val visual = pages.firstOrNull { it.heroTemplate != null && it.heroIsWide }
-                ?: pages.firstOrNull { it.heroTemplate != null } ?: verifiedPrevious ?: first
+            val currentVisual = pages.firstOrNull { it.motion != null }
+                ?: pages.firstOrNull { it.heroTemplate != null && it.heroIsWide }
+                ?: pages.firstOrNull { it.heroTemplate != null }
+            val visual = currentVisual ?: verifiedPrevious ?: first
             val profiles = listOfNotNull(profile) + pages.mapNotNull { it.details }
             val bio = profiles.firstOrNull { it.biography != null }
             val details = AmArtistDetails(
@@ -282,6 +294,7 @@ class AppleMusicCatalog(
             val logo = pages.firstOrNull { it.logoTemplate != null } ?: verifiedPrevious
             val avatar = pages.firstOrNull { it.avatarTemplate != null } ?: verifiedPrevious
             return visual.copy(artistId = first.artistId, fetchedAt = now, details = details, detailsFetchedAt = now,
+                motion = currentVisual?.motion, motionCheckedAt = currentVisual?.motionCheckedAt ?: first.motionCheckedAt,
                 logoTemplate = logo?.logoTemplate, logoCrop = logo?.logoCrop ?: "bb",
                 avatarTemplate = avatar?.avatarTemplate, avatarCrop = avatar?.avatarCrop ?: "bb")
         }

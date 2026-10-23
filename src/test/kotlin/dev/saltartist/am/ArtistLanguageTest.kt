@@ -69,7 +69,7 @@ class ArtistLanguageTest {
             val now = System.currentTimeMillis()
             val old = artist("这是一段为旧缓存迁移专门创作的中文资料，不应被语言设置切换丢失。", PreferredArtistLanguage.CHINESE)
                 .copy(artistId = "99", fetchedAt = now, detailsFetchedAt = now, details = AmArtistDetails(biography = "这是一段为旧缓存迁移专门创作的中文资料，不应被语言设置切换丢失。"))
-            val encoded = AppleMusicCache.encode("test", old)
+            val encoded = legacyCache("test", old, "2")
             assertEquals("2", encoded.split('\t')[8])
             directory.resolve("apple-music-cache.tsv").writeText(encoded + "\n")
             val requests = arrayListOf<String>()
@@ -93,14 +93,18 @@ class ArtistLanguageTest {
             val now = System.currentTimeMillis()
             val scope = ArtistIdentityPolicy(enabled = false).artistCacheKey("test")
             val cn = artist("这是一段为命名空间中文缓存测试创作的正文，重载后仍应保留中文。", PreferredArtistLanguage.CHINESE)
-                .let { it.copy(fetchedAt = now, detailsFetchedAt = now, details = it.details?.copy(languageCode = null)) }
-            val en = artist(english, PreferredArtistLanguage.ENGLISH).copy(fetchedAt = now, detailsFetchedAt = now)
+                .let { it.copy(fetchedAt = now, detailsFetchedAt = now, details = it.details?.copy(languageCode = null), motionCheckedAt = now) }
+            val en = artist(english, PreferredArtistLanguage.ENGLISH).copy(fetchedAt = now, detailsFetchedAt = now, motionCheckedAt = now)
             directory.resolve("apple-music-cache.tsv").writeText(
-                AppleMusicCache.encode("$scope|zh-Hans", cn) + "\n" + AppleMusicCache.encode("$scope|en-US", en) + "\n",
+                legacyCache("$scope|zh-Hans", cn, "2") + "\n" + legacyCache("$scope|en-US", en, "3") + "\n",
             )
-            val catalog = AppleMusicCatalog(directory, PluginLog(null), { error("Scoped fresh records must not fetch") }, noProfile)
-            assertEquals(cn.details?.biography, catalog.resolve("test", ArtistLanguagePolicy(showOtherLanguages = false))?.details?.biography)
+            val requests = arrayListOf<String>()
+            val catalog = AppleMusicCatalog(directory, PluginLog(null), { url -> requests += url; fixture }, noProfile)
+            assertEquals(cn.details?.biography, catalog.cached("test", ArtistLanguagePolicy(showOtherLanguages = false))?.details?.biography)
             assertEquals(english, catalog.cached("test", ArtistLanguagePolicy(PreferredArtistLanguage.ENGLISH, false))?.details?.biography)
+            assertEquals(0L, catalog.cached("test")?.motionCheckedAt)
+            assertTrue(assertNotNull(catalog.resolve("test", ArtistLanguagePolicy(showOtherLanguages = false))).motionCheckedAt > 0L)
+            assertTrue(requests.isNotEmpty(), "A legacy language profile must check header motion once")
             catalog.saveCache()
             val reloaded = AppleMusicCatalog(directory, PluginLog(null))
             assertEquals("zh-Hans", reloaded.cached("test")?.details?.languageCode)
@@ -109,10 +113,10 @@ class ArtistLanguageTest {
     }
 
     @Test
-    fun v3CacheRetainsAnEnglishBiographyAndLanguageTag() {
+    fun currentCacheRetainsAnEnglishBiographyAndLanguageTag() {
         val original = artist(english, PreferredArtistLanguage.ENGLISH)
         val encoded = AppleMusicCache.encode("test|en-US", original)
-        assertEquals("3", encoded.split('\t')[8])
+        assertEquals("4", encoded.split('\t')[8])
         assertEquals("test|en-US" to original, AppleMusicCache.decode(encoded))
     }
 
@@ -155,7 +159,11 @@ class ArtistLanguageTest {
         AppleMusicCatalog(null, PluginLog(null), { url -> urls += url; if ("itunes.apple.com" in url) searchResult else page(url) }, noProfile)
 
     private fun artist(bio: String, language: PreferredArtistLanguage) = AmArtist("42", "hero", "bb", true,
-        null, "bb", 1L, details = AmArtistDetails(biography = bio, languageCode = language.code), detailsFetchedAt = 1L)
+        null, "bb", 1L, details = AmArtistDetails(biography = bio, languageCode = language.code), detailsFetchedAt = 1L, motionCheckedAt = 1L)
+
+    private fun legacyCache(key: String, artist: AmArtist, version: String): String =
+        AppleMusicCache.encode(key, artist).split('\t').take(if (version == "2") 18 else 19)
+            .toMutableList().apply { this[8] = version }.joinToString("\t")
 
     private val searchResult = """{"results":[{"artistName":"test","artistLinkUrl":"https://music.apple.com/cn/artist/test/42"}]}"""
 }

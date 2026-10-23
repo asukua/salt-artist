@@ -18,6 +18,7 @@ internal object AppleMusicProfileClient {
     private val tokenLock = Any()
     private var cachedBearer: AppBearer? = null
     private var nextTokenAttemptAt = 0L
+    private val defaultHealth = ArtistStorefrontHealth()
 
     // Avoid an automatically generated toString containing the bearer.
     private class AppBearer(val value: String, val usableUntil: Long)
@@ -26,34 +27,81 @@ internal object AppleMusicProfileClient {
     /** Blocking: use the artwork worker, just like the existing public-page fetch. */
     fun resolve(artistId: String, artistPageHtml: String?, log: PluginLog,
                 language: PreferredArtistLanguage = PreferredArtistLanguage.CHINESE,
-                allowOtherLanguages: Boolean = false): AmArtistDetails? {
+                allowOtherLanguages: Boolean = false,
+                storefronts: List<String> = emptyList(),
+                health: ArtistStorefrontHealth = defaultHealth): AmArtistDetails? {
         if (!artistId.matches(Regex("[0-9]+"))) return null
-        var bearer = bearerFor(artistId, artistPageHtml, log) ?: return null
-        val storefront = when (language) { PreferredArtistLanguage.CHINESE -> "cn"; PreferredArtistLanguage.ENGLISH -> "us"; PreferredArtistLanguage.JAPANESE -> "jp" }
-        val locale = if (language == PreferredArtistLanguage.CHINESE) "zh-Hans-CN" else language.code
-        val endpoint = "https://amp-api.music.apple.com/v1/catalog/$storefront/artists/$artistId" +
-            "?extend=artistBio,bornOrFormed,origin,editorialArtwork,hero,isGroup,plainEditorialNotes" +
-            "&include=artist-biography-canvas&l=$locale&platform=web"
-        var response = get(endpoint, bearer.value, log) ?: return null
-        if (response.status == 401 || response.status == 403) {
-            rejectBearer(bearer, backoff = false)
-            // A fresh page discovers the current hashed index asset after a rotation.
-            bearer = bearerFor(artistId, null, log) ?: return null
-            response = get(endpoint, bearer.value, log) ?: return null
-            if (response.status == 401 || response.status == 403) {
-                rejectBearer(bearer, backoff = true)
-                return null
+        val regions = profileStorefronts(storefronts, language)
+        var bearer = bearerFor(artistId, artistPageHtml, log, regions, health) ?: return null
+        var refreshed = false
+        var unavailable = false
+        val details = resolveProfiles(artistId, language, allowOtherLanguages, regions, health) request@{ endpoint ->
+            if (unavailable) return@request null
+            var response = get(endpoint, bearer.value, log) ?: run {
+                if ("/catalog/us/" in endpoint) health.unavailable("US", regions)
+                return@request null
             }
+            if (response.status == 401 || response.status == 403) {
+                if (refreshed) {
+                    rejectBearer(bearer, backoff = true)
+                    unavailable = true
+                    return@request null
+                }
+                rejectBearer(bearer, backoff = false)
+                // A fresh page discovers the current index after a token rotation.
+                val replacement = bearerFor(artistId, null, log, regions, health)
+                if (replacement == null) { unavailable = true; return@request null }
+                bearer = replacement
+                refreshed = true
+                response = get(endpoint, bearer.value, log) ?: run {
+                    if ("/catalog/us/" in endpoint) health.unavailable("US", regions)
+                    return@request null
+                }
+                if (response.status == 401 || response.status == 403) {
+                    rejectBearer(bearer, backoff = true)
+                    unavailable = true
+                    return@request null
+                }
+            }
+            response.body.takeIf { response.status in 200..299 }
         }
-        if (response.status !in 200..299) return null
-        val details = response.body?.let { parseProfile(it, artistId, language, allowOtherLanguages) }
         if (details != null) {
             log.log("apple-music public profile id=$artistId born=${details.born != null} formed=${details.formed != null} origin=${details.origin != null}")
         }
         return details
     }
 
-    private fun bearerFor(artistId: String, suppliedHtml: String?, log: PluginLog): AppBearer? =
+    /** Region fallback does not change the requested language or accept another artist's facts. */
+    internal fun resolveProfiles(artistId: String, language: PreferredArtistLanguage,
+                                 allowOtherLanguages: Boolean, storefronts: List<String>,
+                                 health: ArtistStorefrontHealth = defaultHealth,
+                                 load: (String) -> String?): AmArtistDetails? {
+        if (!artistId.matches(Regex("[1-9][0-9]{0,19}"))) return null
+        val locale = if (language == PreferredArtistLanguage.CHINESE) "zh-Hans-CN" else language.code
+        for (storefront in health.attempts(profileStorefronts(storefronts, language))) {
+            val region = storefront.lowercase(java.util.Locale.ROOT)
+            val endpoint = "https://amp-api.music.apple.com/v1/catalog/$region/artists/$artistId" +
+                "?extend=artistBio,bornOrFormed,origin,editorialArtwork,hero,isGroup,plainEditorialNotes" +
+                "&include=artist-biography-canvas&l=$locale&platform=web"
+            val body = runCatching { load(endpoint) }.getOrNull() ?: continue
+            if (runCatching { AppleMusicJson.read(body).jsonObject() }.getOrNull() == null) {
+                health.unavailable(storefront, profileStorefronts(storefronts, language))
+                continue
+            }
+            parseProfile(body, artistId, language, allowOtherLanguages, region)?.let { return it }
+        }
+        return null
+    }
+
+    private fun profileStorefronts(regions: List<String>, language: PreferredArtistLanguage): List<String> =
+        if (regions.isEmpty()) listOf(when (language) {
+            PreferredArtistLanguage.CHINESE -> "CN"
+            PreferredArtistLanguage.ENGLISH -> "US"
+            PreferredArtistLanguage.JAPANESE -> "JP"
+        }) else ArtistIdentityPolicy(storefronts = regions.joinToString(",")).storefrontOrder
+
+    private fun bearerFor(artistId: String, suppliedHtml: String?, log: PluginLog,
+                          storefronts: List<String>, health: ArtistStorefrontHealth): AppBearer? =
         synchronized(tokenLock) {
             val now = System.currentTimeMillis()
             cachedBearer?.takeIf { it.usableUntil > now }?.let { return@synchronized it }
@@ -61,8 +109,11 @@ internal object AppleMusicProfileClient {
             if (now < nextTokenAttemptAt) return@synchronized null
             // Back off failed discovery so several artists do not repeatedly download the bundle.
             nextTokenAttemptAt = now + TOKEN_RETRY_MS
-            val html = suppliedHtml ?: get("$MUSIC_ORIGIN/cn/artist/$artistId?l=zh-Hans", null, log)
-                ?.takeIf { it.status in 200..299 }?.body ?: return@synchronized null
+            val html = suppliedHtml ?: health.attempts(storefronts).firstNotNullOfOrNull { storefront ->
+                val response = get("$MUSIC_ORIGIN/${storefront.lowercase(java.util.Locale.ROOT)}/artist/$artistId?l=zh-Hans", null, log)
+                if (response == null) health.unavailable(storefront, storefronts)
+                response?.takeIf { it.status in 200..299 }?.body
+            } ?: return@synchronized null
             val bundleUrl = indexBundleUrl(html) ?: return@synchronized null
             val bundle = get(bundleUrl, null, log)?.takeIf { it.status in 200..299 }?.body
                 ?: return@synchronized null
@@ -119,7 +170,8 @@ internal object AppleMusicProfileClient {
     /** API facts are scoped to one matching artist; biography still comes from the public page. */
     internal fun parseProfile(json: String, expectedId: String,
                               language: PreferredArtistLanguage = PreferredArtistLanguage.CHINESE,
-                              allowOtherLanguages: Boolean = false): AmArtistDetails? = runCatching {
+                              allowOtherLanguages: Boolean = false,
+                              storefront: String? = null): AmArtistDetails? = runCatching {
         if (!expectedId.matches(Regex("[0-9]+"))) return null
         val artists = AppleMusicJson.read(json).jsonObject()?.get("data").jsonArray()
             .mapNotNull { it.jsonObject() }
@@ -138,7 +190,7 @@ internal object AppleMusicProfileClient {
             genres = attributes["genreNames"].jsonArray().filterIsInstance<String>()
                 .mapNotNull { AppleMusicPageParser.localizedGenre(it, language)
                     ?: if (allowOtherLanguages) AppleMusicPageParser.localizedGenre(it, PreferredArtistLanguage.ENGLISH) else null }.distinct(),
-            sourceUrl = sourceUrl ?: "$MUSIC_ORIGIN/${when (language) { PreferredArtistLanguage.CHINESE -> "cn"; PreferredArtistLanguage.ENGLISH -> "us"; PreferredArtistLanguage.JAPANESE -> "jp" }}/artist/$expectedId?l=${language.code}",
+            sourceUrl = sourceUrl ?: "$MUSIC_ORIGIN/${storefront ?: when (language) { PreferredArtistLanguage.CHINESE -> "cn"; PreferredArtistLanguage.ENGLISH -> "us"; PreferredArtistLanguage.JAPANESE -> "jp" }}/artist/$expectedId?l=${language.code}",
             languageCode = language.code,
         ).takeIf { it.hasContent }
     }.getOrNull()

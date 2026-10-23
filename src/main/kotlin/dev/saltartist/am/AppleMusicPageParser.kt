@@ -21,6 +21,7 @@ internal object AppleMusicPageParser {
     fun parseHtml(html: String, expectedId: String, sourceUrl: String, now: Long,
                   language: PreferredArtistLanguage = PreferredArtistLanguage.CHINESE,
                   allowOtherLanguages: Boolean = false): AmArtist? {
+        if (html.length > MAX_PAGE_CHARS) return null
         val serialized = serializedScript.find(html)?.groupValues?.get(1) ?: return null
         val linked = linkedDataScript.findAll(html).flatMap { match ->
             val parsed = runCatching { AppleMusicJson.read(match.groupValues[1]) }.getOrNull()
@@ -61,11 +62,18 @@ internal object AppleMusicPageParser {
         val schema = linkedData.firstOrNull {
             it.textAt("@type") in setOf("MusicGroup", "Person") && artistIdOf(it.textAt("url")) == expectedId
         }
+        val variants = videoVariants(header.objectAt("wideVideoArtwork"),
+            listOf("motionArtistFullscreen16x9", "motionArtistWide16x9"), wide = true) +
+            videoVariants(header.objectAt("videoArtwork"), listOf("motionArtistSquare1x1"), wide = false)
+        val video = variants.firstOrNull { it.motion != null && it.poster != null }
+            ?: variants.firstOrNull { it.motion != null }
+            ?: variants.firstOrNull { it.poster != null }
         val wide = artwork(header["wideArtwork"])
-            ?: videoFrame(header.objectAt("wideVideoArtwork"), listOf("motionArtistWide16x9", "motionArtistFullscreen16x9"))
         val square = artwork(header["artwork"]) ?: artwork(header["colorBackdropArtwork"])
             ?: artwork(header["fallbackArtwork"])
-        val hero = wide ?: square
+        // Legacy wideArtwork can coexist with a newer motion header. Use the
+        // current variant's poster even when animation is disabled or unavailable.
+        val hero = video?.poster ?: wide ?: square
         val logo = artwork(header["artistLogo"])
         val avatar = artwork(header["circleArtwork"]) ?: square
         val biographies = listOfNotNull(
@@ -97,7 +105,7 @@ internal object AppleMusicPageParser {
             artistId = expectedId,
             heroTemplate = hero?.url,
             heroCrop = hero?.crop ?: "bb",
-            heroIsWide = wide != null,
+            heroIsWide = if (video?.poster != null) video.wide else wide != null,
             logoTemplate = logo?.url,
             logoCrop = logo?.crop ?: "bb",
             fetchedAt = now,
@@ -105,6 +113,8 @@ internal object AppleMusicPageParser {
             avatarTemplate = avatar?.url,
             avatarCrop = avatar?.crop ?: "bb",
             detailsFetchedAt = now,
+            motion = video?.motion,
+            motionCheckedAt = now,
         )
     }.getOrNull()
 
@@ -182,18 +192,47 @@ internal object AppleMusicPageParser {
         return safeImageUrl(url)?.let { ImageTemplate(it, container.textAt("cropStyle") ?: "bb") }
     }
 
-    private fun videoFrame(value: Map<*, *>?, keys: List<String>): ImageTemplate? {
-        val frames = value.objectAt("dictionary") ?: return null
-        return keys.firstNotNullOfOrNull { key ->
-            val url = frames.objectAt(key).objectAt("previewFrame").textAt("url") ?: return@firstNotNullOfOrNull null
-            safeImageUrl(url)?.let { ImageTemplate(it, value.textAt("cropStyle") ?: "bb") }
+    private data class VideoVariant(val poster: ImageTemplate?, val motion: AmArtistMotion?, val wide: Boolean)
+
+    private fun videoVariants(value: Map<*, *>?, keys: List<String>, wide: Boolean): List<VideoVariant> {
+        val frames = value.objectAt("dictionary") ?: return emptyList()
+        val crop = value.textAt("cropStyle") ?: "bb"
+        return keys.mapNotNull { key ->
+            val entry = frames.objectAt(key) ?: return@mapNotNull null
+            val poster = entry.objectAt("previewFrame").textAt("url")?.let(::safeImageUrl)?.let { ImageTemplate(it, crop) }
+            val url = entry.textAt("video")?.let(::safeMotionUrl)
+            val motion = url?.let { AmArtistMotion(it, checkNotNull(motionKind(it)), poster?.url, crop) }
+            VideoVariant(poster, motion, wide).takeIf { poster != null || motion != null }
         }
     }
 
-    private fun safeImageUrl(url: String): String? = runCatching {
+    internal fun safeImageUrl(url: String): String? = runCatching {
+        if (url.length > MAX_MEDIA_URL_CHARS) return null
         val uri = URI(url.replace("{", "%7B").replace("}", "%7D"))
-        url.takeIf { uri.scheme == "https" && (uri.host == "mzstatic.com" || uri.host?.endsWith(".mzstatic.com") == true) }
+        val host = uri.host?.lowercase(Locale.ROOT)
+        url.takeIf { uri.scheme == "https" && uri.userInfo == null && uri.port in listOf(-1, 443) &&
+            uri.fragment == null && (host == "mzstatic.com" || host?.endsWith(".mzstatic.com") == true) }
     }.getOrNull()
+
+    internal fun safeMotionUrl(url: String): String? = runCatching {
+        if (url.length > MAX_MEDIA_URL_CHARS) return null
+        val uri = URI(url)
+        val host = uri.host?.lowercase(Locale.ROOT) ?: return null
+        url.takeIf { uri.scheme == "https" && uri.userInfo == null && uri.port in listOf(-1, 443) &&
+            uri.fragment == null && (host.endsWith(".itunes.apple.com") || host == "mzstatic.com" ||
+            host.endsWith(".mzstatic.com")) && motionKind(url) != null }
+    }.getOrNull()
+
+    internal fun motionKind(url: String): AmMotionKind? = runCatching {
+        when {
+            URI(url).path.endsWith(".m3u8", ignoreCase = true) -> AmMotionKind.HLS
+            URI(url).path.endsWith(".mp4", ignoreCase = true) -> AmMotionKind.MP4
+            else -> null
+        }
+    }.getOrNull()
+
+    private const val MAX_PAGE_CHARS = 12_000_000
+    private const val MAX_MEDIA_URL_CHARS = 8192
 
     internal fun chineseBiography(value: String?): String? {
         val text = plainText(value)?.takeIf { it.length <= 30_000 } ?: return null

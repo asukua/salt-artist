@@ -85,6 +85,7 @@ internal fun ArtistHero(
     onInfo: () -> Unit,
     onPlay: () -> Unit,
     onToggleFavorite: () -> Unit,
+    motionContent: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val heroPx = with(LocalDensity.current) { height.toPx().coerceAtLeast(1f) }
     val progress = (scroll.value / heroPx).coerceIn(0f, 1f)
@@ -172,6 +173,10 @@ internal fun ArtistHero(
                         )
                     }
                 }
+
+                // Motion shares the photograph's exact fade and clipping. The
+                // current poster remains underneath until a video frame arrives.
+                if (progress < 0.60f) motionContent?.invoke(Modifier.fillMaxSize())
 
                 // A soft band is present only at the lower edge at rest. Scrolling
                 // moves it upwards, using the cached bitmap instead of a render effect.
