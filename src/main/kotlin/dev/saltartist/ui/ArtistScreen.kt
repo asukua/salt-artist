@@ -78,7 +78,7 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
         deps.artwork.artworkFor(artistName, rawModel.heroTrackId, settings.languagePolicy, settings.identityPolicy)
     }
     val amArt = deps.artwork.appleArt(artistName, settings.languagePolicy, settings.identityPolicy)
-    val artwork = resolvedArtwork ?: amArt?.hero ?: deps.artwork.cover(rawModel.heroTrackId)
+    val artwork = resolvedArtwork ?: amArt?.hero ?: deps.artwork.heroCover(rawModel.heroTrackId)
     val palette = artwork?.palette ?: ArtworkPalette.Fallback
     val motion = amArt?.motion?.takeIf {
         nativeMotionEnabled() && settings.animatedHero && customPhoto == null && artwork != null && artwork === amArt.hero
@@ -203,6 +203,7 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
                     logo = customLogoBitmap ?: amArt?.logo,
                     scroll = scroll,
                     immersive = settings.immersiveHero,
+                    scrollBlur = settings.scrollHeroBlur,
                     height = heroHeight,
                     isFavorite = isFavorite,
                     enabled = model.tracks.isNotEmpty(),
@@ -210,7 +211,8 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
                     onPlay = { playAt(0) },
                     onToggleFavorite = ::toggleFavorite,
                     motionContent = motion?.let { clip ->
-                        { modifier -> ArtistMotionSurface(clip.url, modifier, deps.log) }
+                        { modifier, blur -> ArtistMotionSurface(clip.url, modifier, deps.log,
+                            frameRate = settings.motionFrameRate, blurProgress = blur) }
                     },
                 )
             }

@@ -20,4 +20,6 @@ class ArtistScreenDeps(
     val settings: ArtistSettings,
     val profiles: ArtistProfileStore,
     val log: PluginLog,
-)
+) {
+    internal val directory = dev.saltartist.bridge.ArtistDirectoryState(log)
+}

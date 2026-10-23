@@ -79,16 +79,18 @@ internal fun ArtistHero(
     logo: ImageBitmap?,
     scroll: State<Float>,
     immersive: Boolean,
+    scrollBlur: Boolean = true,
     height: Dp,
     isFavorite: Boolean,
     enabled: Boolean,
     onInfo: () -> Unit,
     onPlay: () -> Unit,
     onToggleFavorite: () -> Unit,
-    motionContent: (@Composable (Modifier) -> Unit)? = null,
+    motionContent: (@Composable (Modifier, Float) -> Unit)? = null,
 ) {
     val heroPx = with(LocalDensity.current) { height.toPx().coerceAtLeast(1f) }
     val progress = (scroll.value / heroPx).coerceIn(0f, 1f)
+    val blurProgress = heroBlurProgress(progress, scrollBlur)
 
     BoxWithConstraints(
         modifier = Modifier
@@ -137,9 +139,9 @@ internal fun ArtistHero(
                     )
                 }
                 if (wide) {
-                    Image(
-                        bitmap = artwork.image,
-                        contentDescription = null,
+                    HeroStillImage(
+                        artwork = artwork,
+                        blurProgress = blurProgress,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                         alignment = Alignment.TopCenter,
@@ -165,9 +167,9 @@ internal fun ArtistHero(
                                 )
                             },
                     ) {
-                        Image(
-                            bitmap = artwork.image,
-                            contentDescription = null,
+                        HeroStillImage(
+                            artwork = artwork,
+                            blurProgress = blurProgress,
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Fit,
                         )
@@ -176,35 +178,36 @@ internal fun ArtistHero(
 
                 // Motion shares the photograph's exact fade and clipping. The
                 // current poster remains underneath until a video frame arrives.
-                if (progress < 0.60f) motionContent?.invoke(Modifier.fillMaxSize())
+                if (progress < 0.86f) motionContent?.invoke(Modifier.fillMaxSize(), blurProgress)
 
-                // A soft band is present only at the lower edge at rest. Scrolling
-                // moves it upwards, using the cached bitmap instead of a render effect.
-                val blurStart = (0.74f * (1f - progress)).coerceIn(0f, 0.74f)
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                        .drawWithContent {
-                            drawContent()
-                            drawRect(
-                                brush = Brush.verticalGradient(
-                                    0.00f to Color.Transparent,
-                                    blurStart to Color.Transparent,
-                                    (blurStart + (1f - blurStart) * 0.50f) to Color.Black.copy(alpha = 0.66f),
-                                    1.00f to Color.Black,
-                                ),
-                                blendMode = BlendMode.DstIn,
-                            )
-                        },
-                ) {
-                    Image(
-                        bitmap = artwork.forBlurProgress(1f),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = if (wide) ContentScale.Crop else ContentScale.Fit,
-                        alignment = if (wide) Alignment.TopCenter else Alignment.Center,
-                    )
+                // With progressive blur off, retain only the fixed lower feather.
+                if (!scrollBlur) {
+                    val blurStart = 0.74f
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                            .drawWithContent {
+                                drawContent()
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        0.00f to Color.Transparent,
+                                        blurStart to Color.Transparent,
+                                        (blurStart + (1f - blurStart) * 0.50f) to Color.Black.copy(alpha = 0.66f),
+                                        1.00f to Color.Black,
+                                    ),
+                                    blendMode = BlendMode.DstIn,
+                                )
+                            },
+                    ) {
+                        Image(
+                            bitmap = artwork.forBlurProgress(1f),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = if (wide) ContentScale.Crop else ContentScale.Fit,
+                            alignment = if (wide) Alignment.TopCenter else Alignment.Center,
+                        )
+                    }
                 }
             }
         }
@@ -275,6 +278,19 @@ internal fun ArtistHero(
                 }
             }
         }
+    }
+}
+
+/** Continuous interpolation through the baked blur images, with clear type/controls above. */
+@Composable
+private fun HeroStillImage(artwork: Artwork, blurProgress: Float, modifier: Modifier,
+                           contentScale: ContentScale, alignment: Alignment = Alignment.Center) {
+    val images = listOf(artwork.image) + artwork.blurred
+    val blend = heroBlurBlend(blurProgress, images.size)
+    Box(modifier) {
+        Image(images[blend.first], null, Modifier.fillMaxSize(), contentScale = contentScale, alignment = alignment)
+        if (blend.second != blend.first) Image(images[blend.second], null,
+            Modifier.fillMaxSize().graphicsLayer { alpha = blend.alpha }, contentScale = contentScale, alignment = alignment)
     }
 }
 

@@ -30,6 +30,17 @@ class NavigationBridge(private val log: PluginLog) {
         return runCatching { method.invoke(navigator); true }.getOrDefault(false)
     }
 
+    fun openArtist(navigator: Any?, name: String): Boolean = runCatching {
+        if (navigator == null || name.isBlank()) return false
+        val route = Class.forName("com.xuncorp.voxzen.ui.navigation.ScreenRoute\$ArtistContent")
+            .getConstructor(String::class.java).newInstance(name)
+        val method = navigator.javaClass.methods.single {
+            it.name == "navigate" && it.parameterCount == 1 && it.parameterTypes[0].isAssignableFrom(route.javaClass)
+        }
+        method.invoke(navigator, route)
+        true
+    }.getOrElse { log.logOnce("directory-navigation", "artist navigation failed: ${log.describe(it)}"); false }
+
     /** 打开宿主原生专辑页；原生页保留专辑内歌曲与播放能力。 */
     fun openAlbum(navigator: Any?, albumTitle: String, artist: String): Boolean {
         if (navigator == null || albumTitle.isBlank()) return false

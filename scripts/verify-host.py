@@ -189,6 +189,23 @@ def main():
                     count = len(re.findall(r"^\s+\d+: invokestatic\s+#" + str(item["cpIndex"]) + r"\s", item_dump, re.MULTILINE))
                     check("one avatar invocation in artist item", count == 1, count)
 
+        if report.get("hostVersion") in ("1.19.1", "1.19.2"):
+            directory = "androidx/compose/ui/\u0417"
+            vm = "androidx/compose/ui/\u05e1"
+            ready = "androidx/compose/ui/\u04db$\u0528"
+            group = "androidx/compose/ui/\u09aa"
+            page_descriptor = "(L" + vm + ";Landroidx/compose/runtime/Composer;II)V"
+            capture_descriptor = "(Landroidx/compose/foundation/layout/BoxScope;L" + ready + ";Landroidx/compose/foundation/layout/PaddingValues;Landroidx/compose/runtime/Composer;I)V"
+            dump("directory-screen-020", directory)
+            for label, name in (("directory-ready-020", ready), ("directory-group-020", group)):
+                dump(label, name)
+                fields = [m for m in read(name)["members"] if m["kind"] == "field" and not m["access"] & 8 and m["descriptor"] == "Ljava/util/List;"]
+                check(label + " owns exactly one List field", len(fields) == 1)
+            check("directory public screen signature", member_exists(directory, "\u037f", page_descriptor, 1 | 8))
+            check("directory ready capture signature", member_exists(directory, "\u037f", capture_descriptor, 2 | 8))
+            check("directory screen called from navigation", any(r["owner"] == directory and r["name"] == "\u037f" and r["descriptor"] == page_descriptor for r in nav["refs"]))
+            check("directory ready capture called in screen", any(r["owner"] == directory and r["name"] == "\u037f" and r["descriptor"] == capture_descriptor for r in read(directory)["refs"]))
+
         contracts = [
             ("playback-controller", "com/xuncorp/voxzen/service/PlaybackController", [
                 ("INSTANCE", "Lcom/xuncorp/voxzen/service/PlaybackController;", 0x0001 | 0x0008),

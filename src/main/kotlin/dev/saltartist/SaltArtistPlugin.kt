@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,6 +40,7 @@ import dev.saltartist.settings.ArtistProfileStore
 import dev.saltartist.settings.ArtistSettings
 import dev.saltartist.ui.ArtistScreen
 import dev.saltartist.ui.ArtistDirectoryAvatar
+import dev.saltartist.ui.ArtistDirectoryScreen
 import dev.saltartist.ui.ArtistScreenDeps
 import dev.saltartist.ui.SaltText
 import java.io.File
@@ -163,6 +166,36 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
             return
         }
         val handles = mutableListOf<HookHandle>()
+        // Observe the existing native ready state, then append the full directory
+        // in the navigation Box. Do not replace the native ViewModel or write its flow.
+        val enhanced = runCatching {
+            handles += WorkshopApi.hookRegistrar.afterComposable(
+                className = directory.screenClass,
+                methodName = HookTargets.ARTIST_PAGE_METHOD,
+                inClass = directory.screenClass,
+                parameterTypes = listOf("androidx.compose.foundation.layout.BoxScope", directory.readyStateClass,
+                    "androidx.compose.foundation.layout.PaddingValues"),
+                priority = 100,
+            ) { call ->
+                val ready = call.arguments.getOrNull(1)
+                DisposableEffect(screenDeps.directory) { onDispose { screenDeps.directory.reset() } }
+                SideEffect { screenDeps.directory.capture(ready) }
+            }
+            handles += WorkshopApi.hookRegistrar.afterComposable(
+                className = directory.screenClass,
+                methodName = HookTargets.ARTIST_PAGE_METHOD,
+                inClass = HookTargets.ARTIST_PAGE_CALLSITE,
+                parameterTypes = listOf(directory.viewModelClass),
+                priority = 100,
+            ) { ArtistDirectoryScreen(screenDeps) }
+        }.onFailure { log.log("enhanced directory unavailable: ${log.describe(it)}") }.isSuccess
+        if (enhanced) {
+            directoryHandles = handles.toList()
+            log.log("enhanced directory hooks installed=${handles.size}")
+            return
+        }
+        handles.forEach { runCatching { it.unhook() } }
+        handles.clear()
         runCatching {
             WorkshopApi.hookRegistrar.afterComposable(
                 className = targets.artistAvatarClass,

@@ -19,6 +19,22 @@
           "default_value": true
         },
         {
+          "key": "artist_motion_fps",
+          "type": "list",
+          "title": "动态头图目标帧率",
+          "summary": "默认 30 帧，实际取决于片源和电脑性能；卡顿时可降低",
+          "entries": ["15 帧（省资源）", "24 帧", "30 帧（流畅）"],
+          "entry_values": ["15", "24", "30"],
+          "default_value": "30"
+        },
+        {
+          "key": "scroll_artist_hero_blur",
+          "type": "switch",
+          "title": "滚动时渐进模糊头图",
+          "summary": "向下滚动时头图逐渐虚化，返回顶部恢复清晰；同时适用于动态头图",
+          "default_value": true
+        },
+        {
           "key": "dim_backdrop",
           "type": "switch",
           "title": "暗色背景",

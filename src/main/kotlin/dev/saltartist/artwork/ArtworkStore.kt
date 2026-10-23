@@ -55,6 +55,7 @@ class ArtworkStore(
     private val requested = AtomicInteger()
 
     private val coverCache = BoundedArtworkCache<String, Artwork>(128)
+    private val heroCoverCache = BoundedArtworkCache<String, Artwork>(4)
     private val customPhotoCache = BoundedArtworkCache<String, Artwork>(4)
     private val localPhotoCache = BoundedArtworkCache<String, Artwork>(4)
     private val localLogoCache = BoundedArtworkCache<String, ImageBitmap?>(8)
@@ -287,6 +288,23 @@ class ArtworkStore(
         appleArt(artistName, policy, identity)?.hero?.let { return it }
 
         val trackId = coverTrackId?.takeIf(String::isNotBlank) ?: return null
+        return heroCover(trackId)
+    }
+
+    /** Bake blur only for currently visited hero fallbacks, never for the entire cover grid. */
+    fun heroCover(trackId: String): Artwork? {
+        if (trackId.isBlank()) return null
+        heroCoverCache[trackId]?.let { return it }
+        val key = "hero-cover:$trackId"
+        if (inFlight.putIfAbsent(key, true) == null) runCatching {
+            WorkshopApi.library.getCoverById(trackId).whenComplete { bytes, error ->
+                if (error != null || bytes == null || bytes.isEmpty()) inFlight.remove(key)
+                else runCatching { executor.execute {
+                    try { runCatching { decode(bytes, maxSide = 640, blur = true) }.getOrNull()?.let { heroCoverCache[trackId] = it } }
+                    finally { inFlight.remove(key) }
+                } }.onFailure { inFlight.remove(key) }
+            }
+        }.onFailure { inFlight.remove(key) }
         return cover(trackId)
     }
 
@@ -321,6 +339,7 @@ class ArtworkStore(
 
     fun clear() {
         coverCache.clear()
+        heroCoverCache.clear()
         customPhotoCache.clear()
         localPhotoCache.clear()
         localLogoCache.clear()
@@ -339,6 +358,21 @@ class ArtworkStore(
     /** Small circular portraits only; never starts hero/profile downloads. */
     fun artistAvatar(artistName: String, identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false)): ImageBitmap? =
         directoryAvatars.avatar(artistName, identity)
+
+    /** Preserve native, user-selected directory covers without creating hero blur caches. */
+    fun directoryCover(path: String?): ImageBitmap? {
+        val file = path?.let { value -> runCatching {
+            if (value.startsWith("file:")) File(URI(value)) else File(value)
+        }.getOrNull() }?.takeIf { it.isFile } ?: return null
+        val key = "directory:${file.absolutePath}|${file.lastModified()}|${file.length()}"
+        coverCache[key]?.let { return it.image }
+        if (inFlight.putIfAbsent(key, true) == null) runCatching { executor.execute {
+            try {
+                runCatching { decode(readLocalImage(file), maxSide = 320, blur = false) }.getOrNull()?.let { coverCache[key] = it }
+            } finally { inFlight.remove(key) }
+        } }.onFailure { inFlight.remove(key) }
+        return null
+    }
 
     /** Explicit UI search runs on its caller's IO worker, separate from image loading. */
     fun searchArtistCandidates(query: String, identity: ArtistIdentityPolicy): List<ArtistMatchCandidate> =
@@ -408,18 +442,15 @@ class ArtworkStore(
         val w = (source.width * scale).toInt().coerceAtLeast(1)
         val h = (source.height * scale).toInt().coerceAtLeast(1)
         return BLUR_SIGMAS.map { sigma ->
-            val surface = Surface.makeRasterN32Premul(w, h)
-            val paint = Paint().apply {
-                imageFilter = ImageFilter.makeBlur(sigma, sigma, FilterTileMode.CLAMP)
+            Surface.makeRasterN32Premul(w, h).use { surface ->
+                ImageFilter.makeBlur(sigma, sigma, FilterTileMode.CLAMP).use { filter ->
+                    Paint().use { paint ->
+                        paint.imageFilter = filter
+                        surface.canvas.drawImageRect(source, Rect.makeWH(w.toFloat(), h.toFloat()), paint)
+                    }
+                }
+                surface.makeImageSnapshot().toComposeImageBitmap()
             }
-            surface.canvas.drawImageRect(
-                source,
-                Rect.makeWH(w.toFloat(), h.toFloat()),
-                paint,
-            )
-            val snapshot: ImageBitmap = surface.makeImageSnapshot().toComposeImageBitmap()
-            surface.close()
-            snapshot
         }
     }
 

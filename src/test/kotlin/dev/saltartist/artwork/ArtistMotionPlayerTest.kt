@@ -10,6 +10,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class ArtistMotionPlayerTest {
+    @Test fun framePacingSubtractsDecodeTimeInsteadOfAddingAFixedPause() {
+        assertEquals(34L, motionFrameDelayMs(0, 0, 30))
+        assertEquals(14L, motionFrameDelayMs(0, 20_000_000, 30))
+        assertEquals(1L, motionFrameDelayMs(0, 50_000_000, 30))
+        assertEquals(47L, motionFrameDelayMs(0, 20_000_000, 15))
+    }
     private class Backend : MotionBackend {
         val calls = mutableListOf<List<String>>()
         var closed = 0

@@ -38,10 +38,11 @@ import kotlin.coroutines.EmptyCoroutineContext
 
 /** CPU frames are drawn as ordinary raster images; no host video Surface or GPU handles. */
 @Composable
-internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog, onFailure: () -> Unit = {}) {
+internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog,
+                                frameRate: Int = 30, blurProgress: Float = 0f, onFailure: () -> Unit = {}) {
     var failed by remember(url) { mutableStateOf(false) }
     if (failed || !LocalWindowInfo.current.isWindowFocused) return
-    val worker = remember(url) { SoftwareMotionWorker() }
+    val worker = remember(url, frameRate) { SoftwareMotionWorker() }
     val frames = remember(worker) { OwnedMotionFrame<org.jetbrains.skia.Image>() }
     var revision by remember(worker) { mutableStateOf(0L) }
     DisposableEffect(worker) {
@@ -52,7 +53,7 @@ internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog
             frames.close()
         }
     }
-    LaunchedEffect(worker) {
+    LaunchedEffect(worker, frameRate) {
         try {
             withContext(Dispatchers.IO) {
                 require(isAppleMotionUrl(url))
@@ -60,6 +61,7 @@ internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog
                 val started = System.nanoTime()
                 var received = false
                 while (isActive && !worker.isClosed) {
+                    val frameStarted = System.nanoTime()
                     val frame = worker.read()
                     if (frame != null) {
                         val image = org.jetbrains.skia.Image.makeRaster(
@@ -70,7 +72,7 @@ internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog
                     } else if (!received && System.nanoTime() - started > 15_000_000_000L) {
                         error("video produced no CPU frames")
                     }
-                    delay(100)
+                    delay(motionFrameDelayMs(frameStarted, System.nanoTime(), frameRate))
                 }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -87,13 +89,27 @@ internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog
             val width = image.width * scale
             val height = image.height * scale
             drawIntoCanvas { canvas ->
-                canvas.nativeCanvas.drawImageRect(image,
-                    org.jetbrains.skia.Rect.makeWH(image.width.toFloat(), image.height.toFloat()),
-                    org.jetbrains.skia.Rect.makeLTRB((size.width-width)/2, 0f, (size.width+width)/2, height),
-                    org.jetbrains.skia.SamplingMode.LINEAR, null, true)
+                val sigma = blurProgress.coerceIn(0f, 1f) * 18f * maxOf(size.width, size.height) / 480f
+                // Ordinary Skia filtering of our owned raster frame, never a video
+                // Surface or a Compose RenderEffect that can outlive a scrolling item.
+                val filter = if (sigma > 0.05f) org.jetbrains.skia.ImageFilter.makeBlur(sigma, sigma, org.jetbrains.skia.FilterTileMode.CLAMP) else null
+                val paint = org.jetbrains.skia.Paint()
+                try {
+                    paint.imageFilter = filter
+                    canvas.nativeCanvas.drawImageRect(image,
+                        org.jetbrains.skia.Rect.makeWH(image.width.toFloat(), image.height.toFloat()),
+                        org.jetbrains.skia.Rect.makeLTRB((size.width-width)/2, 0f, (size.width+width)/2, height),
+                        org.jetbrains.skia.SamplingMode.LINEAR, paint, true)
+                } finally { paint.close(); filter?.close() }
             }
         }
     }
+}
+
+/** Account for decode/copy time rather than adding a fixed sleep after each frame. */
+internal fun motionFrameDelayMs(started: Long, finished: Long, fps: Int): Long {
+    val budget = 1_000_000_000L / fps.coerceIn(15, 30)
+    return ((budget - (finished - started).coerceAtLeast(0) + 999_999) / 1_000_000).coerceAtLeast(1)
 }
 
 // Kept as a policy boundary: this now enables only CPU drawing, never the old native Surface.

@@ -21,6 +21,8 @@ object HookTargets {
     data class DirectoryTargets(
         val screenClass: String,
         val itemClass: String,
+        val viewModelClass: String = "androidx.compose.ui.\u05E1",
+        val readyStateClass: String = "androidx.compose.ui.\u04DB\$\u0528",
     )
 
     const val ARTIST_PAGE_METHOD = "\u037F"

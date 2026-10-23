@@ -69,7 +69,7 @@ internal class ArtistAvatarStore(
             nextLookupAt = System.currentTimeMillis() + 3100L
             val meta = cat.resolveAvatar(name, identity)
             if (!isCurrent(identity)) return
-            val bytes = meta?.let { download(cat.imageUrl(it.template, it.crop, 128, 128)) }
+            val bytes = meta?.let { download(cat.imageUrl(it.template, it.crop, 320, 320)) }
             val bitmap = bytes?.let { runCatching { decode(it) }.getOrNull() }
             if (bitmap != null) {
                 file(key)?.let { destination ->
@@ -91,10 +91,10 @@ internal class ArtistAvatarStore(
     private fun publish(key: String, value: Result) {
         if (closed) return
         images[key] = value
-        if (images.size > 256) images.keys.firstOrNull { it != key }?.let(images::remove)
+        if (images.size > 128) images.keys.firstOrNull { it != key }?.let(images::remove)
     }
 
-    private fun file(key: String): File? = pluginDir?.let { File(it, "apple-music/artist-$key-avatar-small.jpg") }
+    private fun file(key: String): File? = pluginDir?.let { File(it, "apple-music/artist-$key-avatar-320.jpg") }
     private fun decode(bytes: ByteArray): ImageBitmap = Image.makeFromEncoded(bytes).toComposeImageBitmap()
 
     private fun download(url: String): ByteArray? {
@@ -115,7 +115,7 @@ internal class ArtistAvatarStore(
         images.keys.filter { it.startsWith("$base-") }.forEach { images.remove(it) }
         // Refresh removes strict, enabled and past override configurations alike.
         pluginDir?.resolve("apple-music")?.listFiles()?.filter {
-            it.name.startsWith("artist-$base-") && it.name.endsWith("-avatar-small.jpg")
+            it.name.startsWith("artist-$base-") && (it.name.endsWith("-avatar-small.jpg") || it.name.endsWith("-avatar-320.jpg"))
         }?.forEach { runCatching { it.delete() } }
         file(base)?.let { runCatching { it.delete() } } // pre-0.1.5 thumbnail
     }

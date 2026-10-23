@@ -11,6 +11,7 @@ public final class SoftwareVideoFrames implements AutoCloseable {
     private final Function command, free;
     private final NativeLibrary library;
     private boolean closed;
+    private byte[] pixelBuffer;
     public SoftwareVideoFrames(String url) {
         if (Native.POINTER_SIZE != 8) throw new IllegalStateException("Unsupported platform");
         library = NativeLibrary.getInstance("libmpv-2");
@@ -34,6 +35,7 @@ public final class SoftwareVideoFrames implements AutoCloseable {
                 throw new IllegalStateException("loadfile failed");
         } catch(Throwable error) { close(); throw error; }
     }
+    /** Bytes are borrowed until the next read; makeRaster copies them before publication. */
     public record Frame(int width, int height, byte[] bgra) {}
     public synchronized Frame read() {
         if(closed) return null;
@@ -64,11 +66,15 @@ public final class SoftwareVideoFrames implements AutoCloseable {
                 long size = bytes.getLong(8);
                 if (size < (long)stride*height || size>16*1024*1024) throw new IllegalStateException("Invalid frame size");
                 Pointer pixels = bytes.getPointer(0);
-                byte[] copy = new byte[width*height*4];
-                for (int y=0; y<height; y++) pixels.read((long)y*stride,copy,y*width*4,width*4);
-                for(int i=0;i<copy.length;i+=4) {
-                    if (format.startsWith("rgb")) { byte r=copy[i];copy[i]=copy[i+2];copy[i+2]=r; }
-                    copy[i+3]=(byte)255;
+                int length = width*height*4;
+                if (pixelBuffer == null || pixelBuffer.length != length) pixelBuffer = new byte[length];
+                byte[] copy = pixelBuffer;
+                // Normally tightly packed: one native copy instead of 1080 JNA calls.
+                if (stride == width*4) pixels.read(0, copy, 0, length);
+                else for (int y=0; y<height; y++) pixels.read((long)y*stride,copy,y*width*4,width*4);
+                // ImageInfo.OPAQUE ignores the padding/alpha byte; no full-frame alpha pass.
+                if (format.startsWith("rgb")) for(int i=0;i<copy.length;i+=4) {
+                    byte r=copy[i];copy[i]=copy[i+2];copy[i+2]=r;
                 }
                 return new Frame(width,height,copy);
             } finally { free.invokeVoid(new Object[]{result}); }
@@ -77,6 +83,7 @@ public final class SoftwareVideoFrames implements AutoCloseable {
     public synchronized void close() {
         if(closed) return;
         closed=true;
+        pixelBuffer=null;
         library.getFunction("mpv_terminate_destroy").invokeVoid(new Object[]{handle});
     }
     private static int integer(Pointer value) {

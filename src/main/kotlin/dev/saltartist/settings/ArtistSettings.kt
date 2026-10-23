@@ -23,6 +23,9 @@ data class ArtistSettingsData(
     val artistIdentityOverrides: String = "",
     val appleMusicStorefronts: String = ArtistIdentityPolicy.DEFAULT_STOREFRONTS,
     val animatedHero: Boolean = true,
+    val scrollHeroBlur: Boolean = true,
+    val motionFrameRate: Int = 30,
+    val directory: ArtistDirectoryPreferences = ArtistDirectoryPreferences(),
 ) {
     val languagePolicy: ArtistLanguagePolicy
         get() = ArtistLanguagePolicy(preferredLanguage, showOtherLanguages)
@@ -43,6 +46,14 @@ internal fun artistSettingsFromValues(values: Map<String, Any?>): ArtistSettings
     artistIdentityOverrides = values[ArtistSettings.KEY_IDENTITY_OVERRIDES] as? String ?: "",
     appleMusicStorefronts = values[ArtistSettings.KEY_STOREFRONTS] as? String ?: ArtistIdentityPolicy.DEFAULT_STOREFRONTS,
     animatedHero = values[ArtistSettings.KEY_ANIMATED_HERO] as? Boolean ?: true,
+    scrollHeroBlur = values[ArtistSettings.KEY_SCROLL_BLUR] as? Boolean ?: true,
+    motionFrameRate = (values[ArtistSettings.KEY_MOTION_FPS] as? String)?.toIntOrNull()?.takeIf { it in setOf(15, 24, 30) } ?: 30,
+    directory = ArtistDirectoryPreferences(
+        view = ArtistDirectoryView.entries.firstOrNull { it.name == values[ArtistSettings.KEY_DIRECTORY_VIEW] } ?: ArtistDirectoryView.GRID,
+        size = ArtistDirectorySize.entries.firstOrNull { it.name == values[ArtistSettings.KEY_DIRECTORY_SIZE] } ?: ArtistDirectorySize.MEDIUM,
+        sort = ArtistDirectorySort.entries.firstOrNull { it.name == values[ArtistSettings.KEY_DIRECTORY_SORT] } ?: ArtistDirectorySort.NAME,
+        hidden = decodeHiddenArtists(values[ArtistSettings.KEY_HIDDEN_ARTISTS] as? String ?: ""),
+    ),
 )
 
 /** Replace this artist's explicit binding without rewriting unrelated entries. */
@@ -97,6 +108,9 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
             KEY_ALIASES to get(KEY_ALIASES, true), KEY_IDENTITY_OVERRIDES to get(KEY_IDENTITY_OVERRIDES, ""),
             KEY_STOREFRONTS to get(KEY_STOREFRONTS, ArtistIdentityPolicy.DEFAULT_STOREFRONTS),
             KEY_ANIMATED_HERO to get(KEY_ANIMATED_HERO, true),
+            KEY_SCROLL_BLUR to get(KEY_SCROLL_BLUR, true), KEY_MOTION_FPS to get(KEY_MOTION_FPS, "30"),
+            KEY_DIRECTORY_VIEW to get(KEY_DIRECTORY_VIEW, "GRID"), KEY_DIRECTORY_SIZE to get(KEY_DIRECTORY_SIZE, "MEDIUM"),
+            KEY_DIRECTORY_SORT to get(KEY_DIRECTORY_SORT, "NAME"), KEY_HIDDEN_ARTISTS to get(KEY_HIDDEN_ARTISTS, ""),
         ))
         val rawFavorites = runCatching { config?.get<Any?>(KEY_FAVORITES, "") as? String ?: "" }.getOrDefault("")
         val favorites = rawFavorites.split('\n').map(String::trim).filter(String::isNotEmpty).toSet()
@@ -149,6 +163,25 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
         saved
     }
 
+    /** Publish only persisted directory choices; a failed save leaves the active view intact. */
+    fun updateDirectory(transform: (ArtistDirectoryPreferences) -> ArtistDirectoryPreferences): Boolean = synchronized(lock) {
+        val store = config ?: return@synchronized false
+        val previous = read().directory
+        val updated = transform(previous)
+        fun write(value: ArtistDirectoryPreferences) {
+            store.set(KEY_DIRECTORY_VIEW, value.view.name)
+            store.set(KEY_DIRECTORY_SIZE, value.size.name)
+            store.set(KEY_DIRECTORY_SORT, value.sort.name)
+            store.set(KEY_HIDDEN_ARTISTS, encodeHiddenArtists(value.hidden))
+        }
+        val saved = runCatching { write(updated); store.save() }.getOrDefault(false)
+        if (saved) {
+            state.value = state.value.copy(options = read().copy(directory = updated))
+            stamp = fileStamp()
+        } else runCatching { write(previous) }
+        saved
+    }
+
     override fun close() { watcher?.shutdownNow() }
 
     companion object {
@@ -163,5 +196,11 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
         const val KEY_IDENTITY_OVERRIDES = "artist_identity_overrides"
         const val KEY_STOREFRONTS = "apple_music_storefronts"
         const val KEY_ANIMATED_HERO = "animated_artist_hero"
+        const val KEY_SCROLL_BLUR = "scroll_artist_hero_blur"
+        const val KEY_MOTION_FPS = "artist_motion_fps"
+        const val KEY_DIRECTORY_VIEW = "artist_directory_view"
+        const val KEY_DIRECTORY_SIZE = "artist_directory_size"
+        const val KEY_DIRECTORY_SORT = "artist_directory_sort"
+        const val KEY_HIDDEN_ARTISTS = "hidden_artist_names"
     }
 }

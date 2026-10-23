@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.saltartist"
-version = "0.1.10"
+version = "0.2.0"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_25

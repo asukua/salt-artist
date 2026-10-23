@@ -2,6 +2,8 @@
 
 0.1.8 曾根据退出反馈暂停动态播放；0.1.9 改为独立 CPU 解码及普通 raster 图像绘制，恢复开关，完全移除宿主视频 Surface 调用。实现与验证边界见 [设计记录](artist-design.md#019-动态渲染替换)。
 
+0.2.0 的帧率、渐进虚化与增强列表沿用该 CPU 视频路径。列表新增 `З.Ϳ(ס, Composer, int, int)` 的导航 after Hook，以及 `З.Ϳ(BoxScope, ӛ$Ԩ, PaddingValues, Composer, int)` 的只读快照 Hook；状态与分组各验证唯一 List 字段。`scripts/verify-host.py` 已加入这两处方法、调用点和字段契约检查。实现取舍及验证范围见 [0.2.0 设计](artist-design.md#020-帧率滚动虚化与列表管理)。
+
 ## 兼容策略
 
 `HookTargets.forHost()` 按版本选择已核实目标，支持 1.19.0、1.19.1、1.19.2 及其 `-` 后缀；未知版本不注册 Hook，保留原生页。当前字节码证据来自 Steam 版，同版本其他渠道仍需核查。
