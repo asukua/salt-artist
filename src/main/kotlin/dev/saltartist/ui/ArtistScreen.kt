@@ -50,6 +50,7 @@ import androidx.compose.ui.window.PopupProperties
 import com.xuncorp.spw.workshop.api.WorkshopApi
 import dev.saltartist.artwork.ArtworkPalette
 import dev.saltartist.artwork.ArtistMotionSurface
+import dev.saltartist.artwork.nativeMotionEnabled
 import dev.saltartist.data.ArtistAlbum
 import dev.saltartist.data.ArtistPageModel
 import dev.saltartist.data.ArtistTrack
@@ -80,7 +81,7 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
     val artwork = resolvedArtwork ?: amArt?.hero ?: deps.artwork.cover(rawModel.heroTrackId)
     val palette = artwork?.palette ?: ArtworkPalette.Fallback
     val motion = amArt?.motion?.takeIf {
-        settings.animatedHero && customPhoto == null && artwork != null && artwork === amArt.hero
+        nativeMotionEnabled() && settings.animatedHero && customPhoto == null && artwork != null && artwork === amArt.hero
     }
     val logoFile = remember(artistName, revision) { deps.profiles.logoPath(artistName) }
     val customLogoBitmap = deps.artwork.localLogo(logoFile)

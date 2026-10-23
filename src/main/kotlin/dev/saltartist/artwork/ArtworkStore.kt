@@ -54,11 +54,11 @@ class ArtworkStore(
     private val inFlight = ConcurrentHashMap<String, Boolean>()
     private val requested = AtomicInteger()
 
-    private val coverCache = mutableStateMapOf<String, Artwork>()
-    private val customPhotoCache = mutableStateMapOf<String, Artwork>()
-    private val localPhotoCache = mutableStateMapOf<String, Artwork>()
-    private val localLogoCache = mutableStateMapOf<String, ImageBitmap?>()
-    private val appleCache = mutableStateMapOf<String, AmArt>()
+    private val coverCache = BoundedArtworkCache<String, Artwork>(128)
+    private val customPhotoCache = BoundedArtworkCache<String, Artwork>(4)
+    private val localPhotoCache = BoundedArtworkCache<String, Artwork>(4)
+    private val localLogoCache = BoundedArtworkCache<String, ImageBitmap?>(8)
+    private val appleCache = BoundedArtworkCache<String, AmArt>(4)
     private val appleInFlight = ConcurrentHashMap<String, Boolean>()
     private val appleCompletedAt = ConcurrentHashMap<String, Long>()
     private val appleRequests = ArtistArtworkRequests()
@@ -81,7 +81,7 @@ class ArtworkStore(
     fun cacheLocalLogo(file: File): Boolean {
         val key = "${file.absolutePath}|${file.lastModified()}|${file.length()}"
         val image = runCatching {
-            downscale(Image.makeFromEncoded(file.readBytes()), MAX_ART_SIDE).toComposeImageBitmap()
+            downscale(checkedImage(readLocalImage(file)), MAX_ART_SIDE).toComposeImageBitmap()
         }.onFailure { log.log("custom logo decode failed: ${log.describe(it)}") }.getOrNull()
         localLogoCache[key] = image
         return image != null
@@ -151,13 +151,13 @@ class ArtworkStore(
                     }.getOrNull()
                 }
                 val logo = logoBytes?.let { bytes ->
-                    runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }
+                    runCatching { downscale(checkedImage(bytes), 1000).toComposeImageBitmap() }
                         .onFailure { cat.logoFile(artistName, identity)?.delete() }.getOrNull()
                 }
                 val avatar = meta.avatarTemplate?.let { template ->
                     loadImage(cat.avatarFile(artistName, identity), cat.imageUrl(template, meta.avatarCrop, 900, 900))
                 }?.let { bytes ->
-                    runCatching { Image.makeFromEncoded(bytes).toComposeImageBitmap() }
+                    runCatching { downscale(checkedImage(bytes), 900).toComposeImageBitmap() }
                         .onFailure { cat.avatarFile(artistName, identity)?.delete() }.getOrNull()
                 }
                 if (hero == null && logo == null) {
@@ -198,7 +198,7 @@ class ArtworkStore(
     private fun loadImage(file: File?, url: String): ByteArray? {
         val cat = catalog ?: return null
         if (file != null && file.isFile && file.length() > 1024) {
-            return runCatching { file.readBytes() }.getOrNull()
+            return runCatching { readLocalImage(file) }.getOrNull()
         }
         val bytes = runCatching { download(url) }.getOrNull() ?: return null
         if (file != null && bytes.isNotEmpty()) {
@@ -221,7 +221,9 @@ class ArtworkStore(
                 log.log("apple-music image http ${conn.responseCode} $url")
                 null
             } else {
-                conn.inputStream.use { it.readBytes() }
+                conn.inputStream.use { it.readNBytes(MAX_IMAGE_BYTES + 1) }.also {
+                    require(it.size <= MAX_IMAGE_BYTES) { "image response too large" }
+                }
             }
         } finally {
             conn.disconnect()
@@ -252,7 +254,7 @@ class ArtworkStore(
         localPhotoCache[key]?.let { return it }
         if (inFlight.putIfAbsent("custom:$key", true) == null) {
             executor.execute {
-                val artwork = runCatching { decode(file.readBytes()) }.getOrNull()
+                val artwork = runCatching { decode(readLocalImage(file)) }.getOrNull()
                 if (artwork != null) {
                     localPhotoCache[key] = artwork
                 } else {
@@ -273,7 +275,7 @@ class ArtworkStore(
         val photo = photoIndex[key]
         if (photo != null && inFlight.putIfAbsent("photo:$key", true) == null) {
             executor.execute {
-                val artwork = runCatching { decode(photo.readBytes()) }.getOrNull()
+                val artwork = runCatching { decode(readLocalImage(photo)) }.getOrNull()
                 if (artwork != null) customPhotoCache[key] = artwork
                 else log.log("artist photo decode failed: ${photo.name}")
                 inFlight.remove("photo:$key")
@@ -303,7 +305,7 @@ class ArtworkStore(
                     return@whenComplete
                 }
                 executor.execute {
-                    val artwork = runCatching { decode(bytes) }.getOrNull()
+                    val artwork = runCatching { decode(bytes, maxSide = 640, blur = false) }.getOrNull()
                     if (artwork != null) {
                         coverCache[trackId] = artwork
                     }
@@ -342,16 +344,31 @@ class ArtworkStore(
     fun searchArtistCandidates(query: String, identity: ArtistIdentityPolicy): List<ArtistMatchCandidate> =
         catalog?.searchCandidates(query, identity).orEmpty()
 
-    private fun decode(bytes: ByteArray): Artwork? {
+    private fun readLocalImage(file: File): ByteArray {
+        require(file.length() <= MAX_IMAGE_BYTES) { "image file too large" }
+        return file.inputStream().use { it.readNBytes(MAX_IMAGE_BYTES + 1) }.also { require(it.size <= MAX_IMAGE_BYTES) }
+    }
+
+    private fun checkedImage(bytes: ByteArray): Image {
+        require(bytes.size <= MAX_IMAGE_BYTES)
+        val image = Image.makeFromEncoded(bytes)
+        if (!acceptableImageDimensions(image.width, image.height)) {
+            image.close()
+            error("image dimensions too large")
+        }
+        return image
+    }
+
+    private fun decode(bytes: ByteArray, maxSide: Int = MAX_ART_SIDE, blur: Boolean = true): Artwork? {
         if (bytes.isEmpty()) return null
-        val encoded = Image.makeFromEncoded(bytes)
+        val encoded = checkedImage(bytes)
         // 艺人写真常见 2000–4000px 的原图，后台先缩到页面需要的尺寸。
         // 这里必须把原始不透明位图交给 Compose；任何 alpha 淡出都放在 UI 的
         // 独立过渡层里，否则首屏也会被透明像素和页面底色污染。
-        val original = runCatching { ImageIO.read(bytes.inputStream()) }.getOrNull()
-        val skia = downscale(encoded, MAX_ART_SIDE)
+        val original = runCatching { paletteThumbnail(bytes) }.getOrNull()
+        val skia = downscale(encoded, maxSide)
         val image: ImageBitmap = skia.toComposeImageBitmap()
-        val blurred = runCatching { buildBlurSteps(skia) }.getOrDefault(emptyList())
+        val blurred = if (blur) runCatching { buildBlurSteps(skia) }.getOrDefault(emptyList()) else emptyList()
         val palette = original?.let { PaletteExtractor.extract(it) } ?: ArtworkPalette.Fallback
         return Artwork(image, palette, blurred)
     }

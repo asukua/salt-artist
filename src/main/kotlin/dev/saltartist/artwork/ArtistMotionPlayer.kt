@@ -46,6 +46,9 @@ internal fun ArtistMotionSurface(
     log: PluginLog,
     onFailure: () -> Unit = {},
 ) {
+    // Headless decoding did not verify the shared GPU surface. Do not create a
+    // native player until the reported host exits have been diagnosed.
+    if (!nativeMotionEnabled()) return
     var failed by remember(url) { mutableStateOf(false) }
     val failureCallback by rememberUpdatedState(onFailure)
     // Returning removes the effects and native surface, so switching windows
@@ -124,6 +127,8 @@ internal fun ArtistMotionSurface(
         HostMotionSurface(player, modifier.graphicsLayer { alpha = if (ready) 1f else 0.001f }) { fail(it) }
     }
 }
+
+internal fun nativeMotionEnabled(): Boolean = false
 
 @OptIn(InternalComposeApi::class)
 @Composable

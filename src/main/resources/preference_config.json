@@ -47,13 +47,6 @@
           "default_value": "US,JP,CN"
         },
         {
-          "key": "animated_artist_hero",
-          "type": "switch",
-          "title": "动态艺人头图",
-          "summary": "艺人提供动态头图时静音循环播放；关闭或播放失败时显示当前封面。自定义头图优先",
-          "default_value": true
-        },
-        {
           "key": "favorite_artists_first",
           "type": "switch",
           "title": "收藏的艺人优先",
