@@ -2,7 +2,7 @@
 
 [![Build](https://github.com/asukua/salt-artist/actions/workflows/build.yml/badge.svg)](https://github.com/asukua/salt-artist/actions/workflows/build.yml)
 
-给 **Salt Player for Windows** 换一套 Apple Music 风格的艺人页。头图、头像、艺术字和艺人资料从 AM 获取并缓存在本地，也可以换成自己的头图和艺术字。
+给 **Salt Player for Windows** 换一套 Apple Music 风格的艺人页。
 
 [下载最新版本](https://github.com/asukua/salt-artist/releases/latest) · [兼容说明](docs/host-compatibility.md) · [设计与技术说明](docs/artist-design.md)
 
@@ -54,13 +54,12 @@
 
 ## 安装与设置
 
-支持 **SPW 1.19.0 / 1.19.1 / 1.19.2**，艺人列表增强支持 1.19.1 / 1.19.2。
-
 1. 从 [Releases](https://github.com/asukua/salt-artist/releases/latest) 下载 `.spmod`，在 SPW「模组管理」中导入并启用。
 2. 打开艺人页即可使用。在「Salt Artist → 配置」里调整帧率、清晰度、资料语言和匹配方式。
 3. 艺人页右上角更多菜单可手动匹配、换头图和导入艺术字；列表右上角可调整视图、排序和移除恢复。
 
-匹配不到 AM 素材时沿用曲库封面；没有艺人资料时显示本地曲库信息。自定义与收藏保存在插件配置中，不修改音乐文件；停用或卸载后恢复原生页面。
+匹配不到 AM 素材时沿用曲库封面；没有艺人资料时显示本地曲库信息。自定义与收藏保存在插件配置中，不修改音乐文件；停用或卸载后恢复原生页面。头图、头像、艺术字和艺人资料从 AM 获取并缓存在本地，也可以换成自己的头图和艺术字。
+
 
 ## 开发
 
