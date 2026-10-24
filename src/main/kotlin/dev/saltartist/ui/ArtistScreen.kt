@@ -212,7 +212,8 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
                     onToggleFavorite = ::toggleFavorite,
                     motionContent = motion?.let { clip ->
                         { modifier, blur -> ArtistMotionSurface(clip.url, modifier, deps.log,
-                            frameRate = settings.motionFrameRate, blurProgress = blur) }
+                            frameRate = settings.motionFrameRate, blurProgress = blur,
+                            resolution = settings.motionResolution, cache = deps.artwork.motionCache) }
                     },
                 )
             }

@@ -1,6 +1,8 @@
 package dev.saltartist.artwork
 
-import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import dev.saltartist.PluginLog
@@ -21,7 +23,10 @@ internal class ArtistAvatarStore(
     private val catalog: AppleMusicCatalog?,
 ) : AutoCloseable {
     private data class Result(val image: ImageBitmap?, val retryAt: Long = 0L)
-    private val images = mutableStateMapOf<String, Result>()
+    private val images = BoundedArtworkCache<String, Result>(512)
+    // Explicit refresh resets a card's retained portrait; ordinary LRU eviction must not.
+    var revision by mutableStateOf(0L)
+        private set
     private val inFlight = ConcurrentHashMap<String, Boolean>()
     private val local = Executors.newSingleThreadExecutor { task -> Thread(task, "salt-artist-avatar-cache").apply { isDaemon = true } }
     private val remote = Executors.newSingleThreadExecutor { task -> Thread(task, "salt-artist-avatar-network").apply { isDaemon = true } }
@@ -91,7 +96,6 @@ internal class ArtistAvatarStore(
     private fun publish(key: String, value: Result) {
         if (closed) return
         images[key] = value
-        if (images.size > 128) images.keys.firstOrNull { it != key }?.let(images::remove)
     }
 
     private fun file(key: String): File? = pluginDir?.let { File(it, "apple-music/artist-$key-avatar-320.jpg") }
@@ -110,7 +114,8 @@ internal class ArtistAvatarStore(
         } finally { connection.disconnect() }
     }
 
-    fun invalidate(name: String) {
+    @Synchronized fun invalidate(name: String) {
+        revision++
         val base = normalizeArtistKey(name)
         images.keys.filter { it.startsWith("$base-") }.forEach { images.remove(it) }
         // Refresh removes strict, enabled and past override configurations alike.
@@ -120,7 +125,7 @@ internal class ArtistAvatarStore(
         file(base)?.let { runCatching { it.delete() } } // pre-0.1.5 thumbnail
     }
 
-    fun clear() { images.clear() }
+    @Synchronized fun clear() { revision++; images.clear() }
 
     override fun close() {
         closed = true

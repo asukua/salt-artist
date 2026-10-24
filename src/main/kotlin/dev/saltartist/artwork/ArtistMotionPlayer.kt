@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -19,6 +20,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import kotlinx.coroutines.isActive
 import androidx.compose.ui.platform.LocalWindowInfo
 import dev.saltartist.PluginLog
+import dev.saltartist.settings.MotionResolution
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -27,23 +29,26 @@ import kotlinx.coroutines.withContext
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier as JavaModifier
 import java.net.URI
-import java.net.HttpURLConnection
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 
 /** CPU frames are drawn as ordinary raster images; no host video Surface or GPU handles. */
 @Composable
 internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog,
-                                frameRate: Int = 30, blurProgress: Float = 0f, onFailure: () -> Unit = {}) {
-    var failed by remember(url) { mutableStateOf(false) }
+                                frameRate: Int = 30, blurProgress: Float = 0f,
+                                resolution: MotionResolution = MotionResolution.FULL_HD,
+                                cache: MotionVideoCache? = null, onFailure: () -> Unit = {}) {
+    var failed by remember(url, resolution) { mutableStateOf(false) }
     if (failed || !LocalWindowInfo.current.isWindowFocused) return
-    val worker = remember(url, frameRate) { SoftwareMotionWorker() }
+    val worker = remember(url, frameRate, resolution) { SoftwareMotionWorker() }
     val frames = remember(worker) { OwnedMotionFrame<org.jetbrains.skia.Image>() }
+    val published = remember(worker) { AtomicLong() }
     var revision by remember(worker) { mutableStateOf(0L) }
     DisposableEffect(worker) {
         ArtistMotionPlayers.addSoftware(worker)
@@ -53,26 +58,61 @@ internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog
             frames.close()
         }
     }
+    LaunchedEffect(worker) {
+        var displayed = 0L
+        while (isActive && !worker.isClosed) withFrameNanos {
+            val latest = published.get()
+            if (latest != displayed) { displayed = latest; revision++ }
+        }
+    }
     LaunchedEffect(worker, frameRate) {
         try {
             withContext(Dispatchers.IO) {
                 require(isAppleMotionUrl(url))
-                worker.open(resolveAppleMotionStream(url))
-                val started = System.nanoTime()
+                val opening = System.nanoTime()
+                var source = cache?.prepare(url, resolution)
+                    ?: PreparedMotion(url, resolution, resolveAppleMotionStream(url, resolution), url, false)
+                try { worker.open(source.location, resolution) } catch (error: Throwable) {
+                    if (!source.cached || cache == null) throw error
+                    cache.invalidate(url, resolution)
+                    source = cache.remote(url, resolution)
+                    worker.open(source.location, resolution)
+                }
+                var started = System.nanoTime()
                 var received = false
+                var warming = false
+                val pacing = MotionFramePacer(frameRate)
                 while (isActive && !worker.isClosed) {
                     val frameStarted = System.nanoTime()
-                    val frame = worker.read()
+                    val frame = try { worker.read() } catch (error: Throwable) {
+                        if (!source.cached || cache == null) throw error
+                        cache.invalidate(url, resolution)
+                        source = cache.remote(url, resolution)
+                        worker.open(source.location, resolution)
+                        started = System.nanoTime()
+                        continue
+                    }
                     if (frame != null) {
                         val image = org.jetbrains.skia.Image.makeRaster(
                             org.jetbrains.skia.ImageInfo(frame.width(), frame.height(),
                                 org.jetbrains.skia.ColorType.BGRA_8888, org.jetbrains.skia.ColorAlphaType.OPAQUE),
                             frame.bgra(), frame.width() * 4)
-                        if (frames.replace(image)) { received = true; revision++ }
-                    } else if (!received && System.nanoTime() - started > 15_000_000_000L) {
-                        error("video produced no CPU frames")
+                        if (frames.replace(image)) {
+                            if (!received) log.log("motion first frame backend=${worker.backend} cached=${source.cached} quality=${resolution.label} size=${frame.width()}x${frame.height()} ms=${(System.nanoTime()-opening)/1_000_000}")
+                            received = true; published.incrementAndGet()
+                            if (!warming) { warming = true; cache?.warm(source) }
+                        }
+                    } else if (!received && System.nanoTime() - started > if (source.cached) 2_000_000_000L else 15_000_000_000L) {
+                        if (source.cached && cache != null) {
+                            cache.invalidate(url, resolution)
+                            source = cache.remote(url, resolution)
+                            worker.open(source.location, resolution)
+                            started = System.nanoTime()
+                        } else error("video produced no CPU frames")
                     }
-                    delay(motionFrameDelayMs(frameStarted, System.nanoTime(), frameRate))
+                    // Poll cheaply when no source frame is ready. A full-period
+                    // sleep here would miss a frame arriving just after the poll.
+                    delay(if (frame == null) 2L else pacing.afterFrame(frameStarted, System.nanoTime()))
                 }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -82,7 +122,7 @@ internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog
             onFailure()
         } finally { worker.close() }
     }
-    androidx.compose.foundation.Canvas(modifier) {
+    androidx.compose.foundation.Canvas(modifier.graphicsLayer()) {
         revision // Repaint when a new owned CPU frame is published.
         frames.useFrame { image ->
             val scale = maxOf(size.width / image.width, size.height / image.height)
@@ -106,12 +146,6 @@ internal fun ArtistMotionSurface(url: String, modifier: Modifier, log: PluginLog
     }
 }
 
-/** Account for decode/copy time rather than adding a fixed sleep after each frame. */
-internal fun motionFrameDelayMs(started: Long, finished: Long, fps: Int): Long {
-    val budget = 1_000_000_000L / fps.coerceIn(15, 30)
-    return ((budget - (finished - started).coerceAtLeast(0) + 999_999) / 1_000_000).coerceAtLeast(1)
-}
-
 // Kept as a policy boundary: this now enables only CPU drawing, never the old native Surface.
 internal fun nativeMotionEnabled(): Boolean = true
 
@@ -119,12 +153,13 @@ internal class SoftwareMotionWorker : AutoCloseable {
     private val stopped = AtomicBoolean(false)
     private val decoder = AtomicReference<SoftwareVideoFrames?>(null)
     val isClosed: Boolean get() = stopped.get()
-    fun open(url: String) {
+    val backend: String get() = decoder.get()?.backend().orEmpty()
+    fun open(url: String, resolution: MotionResolution = MotionResolution.FULL_HD) {
         if (stopped.get()) return
         ensureHostMpvLoaded()
         if (stopped.get()) return
-        val opened = SoftwareVideoFrames(url)
-        decoder.set(opened)
+        val opened = SoftwareVideoFrames(url, resolution.width, resolution.height)
+        decoder.getAndSet(opened)?.let { previous -> motionCleanup.execute { previous.close() } }
         if (stopped.get()) decoder.getAndSet(null)?.close()
     }
     fun read(): SoftwareVideoFrames.Frame? = if (stopped.get()) null else decoder.get()?.read()
@@ -314,9 +349,10 @@ private val motionCleanup = ThreadPoolExecutor(
     } },
 )
 
-/** Highest full-HD H.264 SDR stream; preview playlists and larger frames stay excluded. */
-internal fun selectAppleMotionVariant(masterUrl: String, playlist: String): String? {
-    data class Variant(val url: String, val pixels: Long, val bandwidth: Long)
+/** Best SDR stream within the selected dimensions; higher tiers also permit HEVC. */
+@JvmOverloads
+internal fun selectAppleMotionVariant(masterUrl: String, playlist: String, resolution: MotionResolution = MotionResolution.FULL_HD): String? {
+    data class Variant(val url: String, val pixels: Long, val h264: Boolean, val bandwidth: Long)
     val candidates = mutableListOf<Variant>()
     var pending: String? = null
     for (raw in playlist.lineSequence()) {
@@ -330,42 +366,29 @@ internal fun selectAppleMotionVariant(masterUrl: String, playlist: String): Stri
                 .find(attributes)?.groupValues?.get(1)?.trim('"')
             val codec = attribute("CODECS").orEmpty().lowercase()
             val range = attribute("VIDEO-RANGE").orEmpty()
-            if (!codec.split(',').any { it.trim().startsWith("avc1") } || (range.isNotEmpty() && range != "SDR")) continue
+            val h264 = codec.split(',').any { it.trim().startsWith("avc1") }
+            val hevc = codec.split(',').any { it.trim().startsWith("hvc1") || it.trim().startsWith("hev1") }
+            if ((!h264 && !(resolution != MotionResolution.FULL_HD && hevc)) || (range.isNotEmpty() && range != "SDR")) continue
             val dimensions = attribute("RESOLUTION")?.split('x')?.mapNotNull(String::toLongOrNull)
             if (dimensions?.size != 2 || dimensions.any { it <= 0 || it > 8192 }) continue
-            if (dimensions[0] > SoftwareVideoFrames.MAX_WIDTH || dimensions[1] > SoftwareVideoFrames.MAX_HEIGHT) continue
+            if (dimensions[0] > resolution.width || dimensions[1] > resolution.height) continue
             val uri = runCatching { URI(masterUrl).resolve(line).toString() }.getOrNull() ?: continue
             if (!isAppleMotionUrl(uri)) continue
-            candidates += Variant(uri, dimensions[0] * dimensions[1],
+            candidates += Variant(uri, dimensions[0] * dimensions[1], h264,
                 attribute("BANDWIDTH")?.toLongOrNull()?.coerceAtLeast(0) ?: 0)
         }
     }
     // The old smallest-first policy enlarged 480x270 video across a desktop hero.
     // Resolution wins; for equal dimensions use the less compressed rendition.
-    return candidates.maxWithOrNull(compareBy<Variant> { it.pixels }.thenBy { it.bandwidth })?.url
+    return candidates.maxWithOrNull(compareBy<Variant> { it.pixels }.thenBy { it.h264 }.thenBy { it.bandwidth })?.url
 }
 
-private fun resolveAppleMotionStream(url: String): String {
+private fun resolveAppleMotionStream(url: String, resolution: MotionResolution): String {
     if (!URI(url).path.lowercase().endsWith(".m3u8")) return url
     // Only a small master manifest is inspected. Media segments and buffering
     // remain in the independent native decoder and disappear when it is closed.
     return runCatching {
-        val connection = URI(url).toURL().openConnection() as HttpURLConnection
-        connection.instanceFollowRedirects = false
-        connection.connectTimeout = 5_000
-        connection.readTimeout = 5_000
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 SaltArtist/0.1.7")
-        connection.setRequestProperty("Accept-Encoding", "identity")
-        try {
-            check(connection.responseCode == 200)
-            val bytes = connection.inputStream.use { it.readNBytes(262_145) }
-            check(bytes.size <= 262_144)
-            val text = bytes.toString(Charsets.UTF_8)
-            check(text.trimStart().startsWith("#EXTM3U"))
-            selectAppleMotionVariant(url, text) ?: url
-        } finally {
-            connection.disconnect()
-        }
+        selectAppleMotionVariant(url, loadAppleMotionManifest(url), resolution) ?: url
     }.getOrDefault(url)
 }
 

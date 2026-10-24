@@ -25,6 +25,7 @@ data class ArtistSettingsData(
     val animatedHero: Boolean = true,
     val scrollHeroBlur: Boolean = true,
     val motionFrameRate: Int = 30,
+    val motionResolution: MotionResolution = MotionResolution.FULL_HD,
     val directory: ArtistDirectoryPreferences = ArtistDirectoryPreferences(),
 ) {
     val languagePolicy: ArtistLanguagePolicy
@@ -47,7 +48,8 @@ internal fun artistSettingsFromValues(values: Map<String, Any?>): ArtistSettings
     appleMusicStorefronts = values[ArtistSettings.KEY_STOREFRONTS] as? String ?: ArtistIdentityPolicy.DEFAULT_STOREFRONTS,
     animatedHero = values[ArtistSettings.KEY_ANIMATED_HERO] as? Boolean ?: true,
     scrollHeroBlur = values[ArtistSettings.KEY_SCROLL_BLUR] as? Boolean ?: true,
-    motionFrameRate = (values[ArtistSettings.KEY_MOTION_FPS] as? String)?.toIntOrNull()?.takeIf { it in setOf(15, 24, 30) } ?: 30,
+    motionFrameRate = motionFrameRate(values[ArtistSettings.KEY_MOTION_FPS]),
+    motionResolution = motionResolution(values[ArtistSettings.KEY_MOTION_RESOLUTION]),
     directory = ArtistDirectoryPreferences(
         view = ArtistDirectoryView.entries.firstOrNull { it.name == values[ArtistSettings.KEY_DIRECTORY_VIEW] } ?: ArtistDirectoryView.GRID,
         size = ArtistDirectorySize.entries.firstOrNull { it.name == values[ArtistSettings.KEY_DIRECTORY_SIZE] } ?: ArtistDirectorySize.MEDIUM,
@@ -101,6 +103,11 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
     private fun <T> get(key: String, default: T): T = runCatching { config?.get(key, default) ?: default }.getOrDefault(default)
 
     private fun load(): Snapshot {
+        val storedFps = get<Any>(KEY_MOTION_FPS, "30")
+        if (storedFps.toString() == "15") runCatching {
+            config?.set(KEY_MOTION_FPS, "24")
+            if (config?.save() == false) config.set(KEY_MOTION_FPS, storedFps)
+        }
         val options = artistSettingsFromValues(mapOf(
             KEY_IMMERSIVE to get(KEY_IMMERSIVE, true), KEY_DIM to get(KEY_DIM, true),
             KEY_NUMBERS to get(KEY_NUMBERS, true), KEY_LANGUAGE to get(KEY_LANGUAGE, "CHINESE"),
@@ -108,7 +115,8 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
             KEY_ALIASES to get(KEY_ALIASES, true), KEY_IDENTITY_OVERRIDES to get(KEY_IDENTITY_OVERRIDES, ""),
             KEY_STOREFRONTS to get(KEY_STOREFRONTS, ArtistIdentityPolicy.DEFAULT_STOREFRONTS),
             KEY_ANIMATED_HERO to get(KEY_ANIMATED_HERO, true),
-            KEY_SCROLL_BLUR to get(KEY_SCROLL_BLUR, true), KEY_MOTION_FPS to get(KEY_MOTION_FPS, "30"),
+            KEY_SCROLL_BLUR to get(KEY_SCROLL_BLUR, true), KEY_MOTION_FPS to storedFps,
+            KEY_MOTION_RESOLUTION to get(KEY_MOTION_RESOLUTION, "FULL_HD"),
             KEY_DIRECTORY_VIEW to get(KEY_DIRECTORY_VIEW, "GRID"), KEY_DIRECTORY_SIZE to get(KEY_DIRECTORY_SIZE, "MEDIUM"),
             KEY_DIRECTORY_SORT to get(KEY_DIRECTORY_SORT, "NAME"), KEY_HIDDEN_ARTISTS to get(KEY_HIDDEN_ARTISTS, ""),
         ))
@@ -198,6 +206,7 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
         const val KEY_ANIMATED_HERO = "animated_artist_hero"
         const val KEY_SCROLL_BLUR = "scroll_artist_hero_blur"
         const val KEY_MOTION_FPS = "artist_motion_fps"
+        const val KEY_MOTION_RESOLUTION = "artist_motion_resolution"
         const val KEY_DIRECTORY_VIEW = "artist_directory_view"
         const val KEY_DIRECTORY_SIZE = "artist_directory_size"
         const val KEY_DIRECTORY_SORT = "artist_directory_sort"

@@ -44,6 +44,7 @@ class ArtworkStore(
     private val log: PluginLog,
     private val catalog: AppleMusicCatalog? = null,
 ) {
+    internal val motionCache = MotionVideoCache(pluginDir, log)
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "salt-artist-artwork").apply { isDaemon = true }
     }
@@ -338,6 +339,7 @@ class ArtworkStore(
     }
 
     fun clear() {
+        motionCache.clear()
         coverCache.clear()
         heroCoverCache.clear()
         customPhotoCache.clear()
@@ -350,6 +352,7 @@ class ArtworkStore(
     }
 
     fun shutdown() {
+        motionCache.close()
         executor.shutdownNow()
         appleExecutor.shutdownNow()
         directoryAvatars.close()
@@ -358,6 +361,8 @@ class ArtworkStore(
     /** Small circular portraits only; never starts hero/profile downloads. */
     fun artistAvatar(artistName: String, identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false)): ImageBitmap? =
         directoryAvatars.avatar(artistName, identity)
+
+    internal val directoryAvatarRevision: Long get() = directoryAvatars.revision
 
     /** Preserve native, user-selected directory covers without creating hero blur caches. */
     fun directoryCover(path: String?): ImageBitmap? {

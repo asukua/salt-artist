@@ -22,4 +22,5 @@ class ArtistScreenDeps(
     val log: PluginLog,
 ) {
     internal val directory = dev.saltartist.bridge.ArtistDirectoryState(log)
+    internal val directoryBrowsing = ArtistDirectoryBrowsing()
 }

@@ -1,8 +1,10 @@
 # 宿主兼容与复核
 
+0.2.2 使用宿主内置 libmpv 的公共 SW render API 输出 CPU 帧，相关 render context、property-change 事件及非阻塞事件读取已在本机 1.19.2 独立运行验证；仍不接宿主视频 Surface 或共享纹理。缺少该 API 的宿主保留截图后端，未知宿主版本仍受原版本登记限制。线程、缓冲所有权与性能证据见 [0.2.2 设计](artist-design.md#022-cpu-视频输出与紧凑目录)。
+
 0.1.8 曾根据退出反馈暂停动态播放；0.1.9 改为独立 CPU 解码及普通 raster 图像绘制，恢复开关，完全移除宿主视频 Surface 调用。实现与验证边界见 [设计记录](artist-design.md#019-动态渲染替换)。
 
-0.2.0 的帧率、渐进虚化与增强列表沿用该 CPU 视频路径。列表新增 `З.Ϳ(ס, Composer, int, int)` 的导航 after Hook，以及 `З.Ϳ(BoxScope, ӛ$Ԩ, PaddingValues, Composer, int)` 的只读快照 Hook；状态与分组各验证唯一 List 字段。`scripts/verify-host.py` 已加入这两处方法、调用点和字段契约检查。实现取舍及验证范围见 [0.2.0 设计](artist-design.md#020-帧率滚动虚化与列表管理)。
+0.2.1 沿用 CPU 视频路径，分辨率、缓存与生命周期边界见 [设计记录](artist-design.md#021-列表接入修复与动态视频缓存)。列表使用 `З.Ϳ(ס, Composer, int, int)` 的唯一导航 afterComposable，以及 ViewModel `ס.Ԫ(): StateFlow` 的普通方法 Hook，在插件层只读收集原状态；状态与分组各验证唯一 List 字段。0.2.0 曾使用的 Success UI 调用在同类内出现两次，宿主定位器拒绝注册，不能继续用“方法存在”作为调用唯一的依据。`verify-host.py` 检查 getter 签名及导航调用次数，`scripts/DirectoryHookProbe.java` 另用真实宿主定位器在独立 JVM 验证两种注册目标，同时复现旧歧义，不在宿主中预加载转换目标。
 
 ## 兼容策略
 

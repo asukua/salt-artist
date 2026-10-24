@@ -23,9 +23,18 @@
           "type": "list",
           "title": "动态头图目标帧率",
           "summary": "默认 30 帧，实际取决于片源和电脑性能；卡顿时可降低",
-          "entries": ["15 帧（省资源）", "24 帧", "30 帧（流畅）"],
-          "entry_values": ["15", "24", "30"],
+          "entries": ["24 帧", "30 帧"],
+          "entry_values": ["24", "30"],
           "default_value": "30"
+        },
+        {
+          "key": "artist_motion_resolution",
+          "type": "list",
+          "title": "动态头图分辨率",
+          "summary": "按片源选择不超过此档位的分辨率；2K / 4K 更耗资源，缺少对应片源时自动使用较低分辨率",
+          "entries": ["1080p", "2K（1440p）", "4K（2160p）"],
+          "entry_values": ["FULL_HD", "QHD", "UHD"],
+          "default_value": "FULL_HD"
         },
         {
           "key": "scroll_artist_hero_blur",

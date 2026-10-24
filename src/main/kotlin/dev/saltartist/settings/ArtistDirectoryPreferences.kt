@@ -10,8 +10,8 @@ enum class ArtistDirectorySize(val label: String, val scale: Float) {
     SMALL("小", 0.78f), MEDIUM("中", 1f), LARGE("大", 1.25f)
 }
 enum class ArtistDirectorySort(val label: String) {
-    NAME("名称 A–Z"), NAME_DESC("名称 Z–A"), ADDED("最近添加"),
-    TRACKS("歌曲最多"), ALBUMS("专辑最多"), NATIVE("原始顺序")
+    NAME("名称升序"), NAME_DESC("名称降序"), ADDED("最近添加"),
+    TRACKS("歌曲数"), ALBUMS("专辑数")
 }
 data class ArtistDirectoryPreferences(
     val view: ArtistDirectoryView = ArtistDirectoryView.GRID,

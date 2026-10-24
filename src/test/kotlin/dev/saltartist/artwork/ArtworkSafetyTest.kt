@@ -39,4 +39,17 @@ class ArtworkSafetyTest {
         assertEquals(2, cache.keys.size)
         assertTrue(held !== cache["d"])
     }
+
+    @Test fun asynchronousDirectoryLoadsDoNotEvictRecentlyVisibleAvatars() {
+        val cache = BoundedArtworkCache<Int, Any>(512)
+        for (id in 0..511) cache[id] = Any()
+        val visible = (0..23).associateWith { cache[it]!! }
+        // Recomposition reads visible keys between background load batches.
+        for (id in 512..1111) {
+            visible.forEach { (key, avatar) -> assertTrue(cache[key] === avatar) }
+            cache[id] = Any()
+        }
+        visible.forEach { (key, avatar) -> assertTrue(cache[key] === avatar) }
+        assertEquals(512, cache.keys.size)
+    }
 }

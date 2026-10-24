@@ -79,6 +79,7 @@ class HookTargetsTest {
             val directory = assertNotNull(assertNotNull(HookTargets.forHost(version)).directory)
             assertEquals("androidx.compose.ui.\u0417", directory.screenClass, version)
             assertEquals("androidx.compose.ui.\u10A5", directory.itemClass, version)
+            assertEquals("\u052A", directory.stateFlowMethod)
         }
         assertEquals("kotlin.jvm.functions.Function1", HookTargets.DIRECTORY_GRID_PARAMS.last())
         assertEquals(11, HookTargets.DIRECTORY_GRID_PARAMS.size)

@@ -47,6 +47,19 @@ class ArtistDirectoryPreferencesTest {
         assertEquals(24, artistSettingsFromValues(mapOf(ArtistSettings.KEY_MOTION_FPS to "24")).motionFrameRate)
     }
 
+    @Test fun motionOptionsMigrateOldFifteenAndPersistTheSelectedResolution() {
+        assertEquals(24, artistSettingsFromValues(mapOf(ArtistSettings.KEY_MOTION_FPS to "15")).motionFrameRate)
+        val oldConfig = MemoryConfig().apply { values[ArtistSettings.KEY_MOTION_FPS] = "15" }
+        ArtistSettings(oldConfig).use { assertEquals(24, it.read().motionFrameRate) }
+        assertEquals("24", oldConfig.values[ArtistSettings.KEY_MOTION_FPS])
+        for (quality in MotionResolution.entries) {
+            val config = MemoryConfig().apply { values[ArtistSettings.KEY_MOTION_RESOLUTION] = quality.name }
+            ArtistSettings(config).use { assertEquals(quality, it.read().motionResolution) }
+        }
+        assertEquals(MotionResolution.FULL_HD,
+            artistSettingsFromValues(mapOf(ArtistSettings.KEY_MOTION_RESOLUTION to "bad")).motionResolution)
+    }
+
     private class MemoryConfig(val succeeds: Boolean = true) : ConfigHelper {
         val values = mutableMapOf<String, Any>()
         @Suppress("UNCHECKED_CAST") override fun <T> get(key: String, defaultValue: T): T = (values[key] ?: defaultValue) as T

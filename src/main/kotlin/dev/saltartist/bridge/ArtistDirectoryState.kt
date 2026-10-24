@@ -10,6 +10,7 @@ import dev.saltartist.settings.ArtistDirectorySort
 import java.lang.reflect.Modifier
 import java.text.Collator
 import java.util.Locale
+import kotlinx.coroutines.flow.StateFlow
 
 internal data class DirectoryArtist(val name: String, val coverPath: String? = null, val favorite: Boolean = false)
 internal data class DirectoryStats(val tracks: Int = 0, val albums: Int = 0, val added: Long = 0, val coverId: String = "")
@@ -19,6 +20,15 @@ internal class ArtistDirectoryState(private val log: PluginLog) {
     private val state = mutableStateOf<List<DirectoryArtist>?>(null)
     val artists: List<DirectoryArtist>? get() = state.value
     private var lastState: Any? = null
+    private val observed = mutableStateOf<StateFlow<*>?>(null)
+    val flow: StateFlow<*>? get() = observed.value
+
+    fun observe(value: Any?) {
+        if (value is StateFlow<*>) observed.value = value
+        else detach()
+    }
+
+    fun detach() { observed.value = null; reset() }
 
     fun capture(ready: Any?) {
         if (ready == null || ready === lastState) return
@@ -80,7 +90,6 @@ internal fun orderDirectoryArtists(
         ArtistDirectorySort.ADDED -> compareByDescending<DirectoryArtist> { stats[artistIdentityKey(it.name)]?.added ?: 0L }.then(names)
         ArtistDirectorySort.TRACKS -> compareByDescending<DirectoryArtist> { stats[artistIdentityKey(it.name)]?.tracks ?: 0 }.then(names)
         ArtistDirectorySort.ALBUMS -> compareByDescending<DirectoryArtist> { stats[artistIdentityKey(it.name)]?.albums ?: 0 }.then(names)
-        ArtistDirectorySort.NATIVE -> Comparator { _, _ -> 0 }
     }
     val filtered = source.filter { !preferences.isHidden(it.name) && it.name.contains(query.trim(), ignoreCase = true) }
     val sorted = filtered.sortedWith(if (favoritesFirst)

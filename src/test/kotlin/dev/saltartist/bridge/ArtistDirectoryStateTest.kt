@@ -6,6 +6,24 @@ import dev.saltartist.settings.*
 import kotlin.test.*
 
 class ArtistDirectoryStateTest {
+    @Test fun observesOnlyStateFlowsAndDetachDropsBothFlowAndSnapshot() {
+        val bridge = ArtistDirectoryState(dev.saltartist.PluginLog(null))
+        val ready = Ready(listOf(Group(listOf(Artist("A")))))
+        val flow = kotlinx.coroutines.flow.MutableStateFlow<Any>(ready)
+        bridge.observe(flow)
+        assertSame(flow, bridge.flow)
+        bridge.capture(ready)
+        bridge.detach()
+        assertNull(bridge.flow)
+        assertNull(bridge.artists)
+        assertSame(ready, flow.value) // No writes to the native source.
+        bridge.observe(flow)
+        bridge.capture(ready)
+        bridge.observe(Any())
+        assertNull(bridge.flow)
+        assertNull(bridge.artists)
+    }
+
     class Artist(private val name: String) { fun getName() = name }
     class Group(private val items: List<Artist>) { fun items() = items; operator fun component2() = items }
     class Ready(private val groups: List<Group>) { fun groups() = groups }
@@ -42,7 +60,8 @@ class ArtistDirectoryStateTest {
         val stats = mapOf("old" to DirectoryStats(added = 4), "new" to DirectoryStats(added = 10))
         val prefs = ArtistDirectoryPreferences(sort = ArtistDirectorySort.ADDED)
         assertEquals(listOf("New", "Old", "Unknown"), orderDirectoryArtists(names, prefs, stats, emptySet(), false, "").map { it.name })
-        assertEquals(names, orderDirectoryArtists(names, prefs.copy(sort = ArtistDirectorySort.NATIVE), stats, emptySet(), false, ""))
+        assertEquals(listOf("New", "Old", "Unknown"), orderDirectoryArtists(names,
+            artistSettingsFromValues(mapOf(ArtistSettings.KEY_DIRECTORY_SORT to "NATIVE")).directory, stats, emptySet(), false, "").map { it.name })
     }
 
     @Test fun statisticsDeduplicateTracksAcrossArtistAndAlbumArtist() {

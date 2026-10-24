@@ -10,12 +10,26 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class ArtistMotionPlayerTest {
-    @Test fun framePacingSubtractsDecodeTimeInsteadOfAddingAFixedPause() {
-        assertEquals(34L, motionFrameDelayMs(0, 0, 30))
-        assertEquals(14L, motionFrameDelayMs(0, 20_000_000, 30))
-        assertEquals(1L, motionFrameDelayMs(0, 50_000_000, 30))
-        assertEquals(47L, motionFrameDelayMs(0, 20_000_000, 15))
+    @Test fun selectedResolutionUsesBestSdrStreamAndFallsBackWithinItsBounds() {
+        val master = "https://mvod.itunes.apple.com/master.m3u8"
+        val playlist = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:CODECS="hvc1.1.6",RESOLUTION=3840x2160,VIDEO-RANGE=PQ,BANDWIDTH=30000000
+            hdr.m3u8
+            #EXT-X-STREAM-INF:CODECS="hvc1.1.6",RESOLUTION=3840x2160,VIDEO-RANGE=SDR,BANDWIDTH=20000000
+            uhd.m3u8
+            #EXT-X-STREAM-INF:CODECS="hvc1.1.6",RESOLUTION=2560x1440,VIDEO-RANGE=SDR,BANDWIDTH=12000000
+            qhd.m3u8
+            #EXT-X-STREAM-INF:CODECS="avc1.640028",RESOLUTION=1920x1080,VIDEO-RANGE=SDR,BANDWIDTH=8000000
+            hd.m3u8
+        """.trimIndent()
+        val qualities = dev.saltartist.settings.MotionResolution.entries
+        for ((quality, name) in qualities.zip(listOf("hd", "qhd", "uhd")))
+            assertEquals("https://mvod.itunes.apple.com/$name.m3u8", selectAppleMotionVariant(master, playlist, quality))
+        assertEquals("https://mvod.itunes.apple.com/hd.m3u8", selectAppleMotionVariant(master,
+            playlist.substringAfter("qhd.m3u8"), dev.saltartist.settings.MotionResolution.UHD))
     }
+
     private class Backend : MotionBackend {
         val calls = mutableListOf<List<String>>()
         var closed = 0
