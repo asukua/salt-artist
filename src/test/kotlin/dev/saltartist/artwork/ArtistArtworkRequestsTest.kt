@@ -6,6 +6,16 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ArtistArtworkRequestsTest {
+    @Test fun clearingAllCachesRejectsEveryPreviouslyQueuedRequest() {
+        val requests = ArtistArtworkRequests()
+        val untouched = requests.generation("untouched")
+        requests.invalidate("changed") { }
+        val changed = requests.generation("changed")
+        requests.clear { }
+        assertFalse(requests.publish("untouched", untouched) { error("late cache write") })
+        assertFalse(requests.publish("changed", changed) { error("late cache write") })
+        assertTrue(requests.publish("changed", requests.generation("changed")) { })
+    }
     @Test
     fun anOldRequestCannotRestoreArtworkAfterRefresh() {
         val requests = ArtistArtworkRequests()

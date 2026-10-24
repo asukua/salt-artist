@@ -3,13 +3,22 @@ package dev.saltartist.artwork
 /** Coordinates refresh with late blocking requests, including their cache publication. */
 internal class ArtistArtworkRequests {
     private val generations = HashMap<String, Long>()
+    private var nextGeneration = 0L
+    private var resetGeneration = 0L
 
     @Synchronized
-    fun generation(artist: String): Long = generations[artist] ?: 0L
+    fun generation(artist: String): Long = generations[artist] ?: resetGeneration
 
     @Synchronized
     fun invalidate(artist: String, clear: () -> Unit) {
-        generations[artist] = generation(artist) + 1L
+        generations[artist] = ++nextGeneration
+        clear()
+    }
+
+    @Synchronized
+    fun clear(clear: () -> Unit) {
+        resetGeneration = ++nextGeneration
+        generations.clear()
         clear()
     }
 

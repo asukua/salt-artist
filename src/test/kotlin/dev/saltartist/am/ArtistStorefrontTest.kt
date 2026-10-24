@@ -51,9 +51,13 @@ class ArtistStorefrontTest {
         assertEquals(listOf("US", "CN", "JP"), requests)
         requests.clear()
         assertEquals("42", resolver.resolve("Solo Artist", ArtistIdentityPolicy(overrides = "Other=99")))
+        assertTrue(requests.isEmpty(), "Editing another binding must retain the verified identity")
+        resolver.forget("Solo Artist")
+        assertEquals("42", resolver.resolve("Solo Artist", ArtistIdentityPolicy(overrides = "Other=99")))
         assertEquals(listOf("CN", "JP"), requests)
         now = 5L * 60 * 1000 + 1L
         requests.clear()
+        resolver.forget("Solo Artist")
         assertEquals("42", resolver.resolve("Solo Artist", ArtistIdentityPolicy(overrides = "Other=98")))
         assertEquals(listOf("US", "CN", "JP"), requests)
     }

@@ -21,8 +21,23 @@ data class ArtistIdentityPolicy(
         if (!enabled) "strict-v2-" + identityDigest(regions)
         else "aliases-v2-" + identityDigest(overrides.trim() + "\n" + regions)
     }
-    fun artistCacheKey(name: String): String = normalizeArtistKey(name) +
-        "--${identityDigest(artistIdentityKey(name))}--$cacheToken"
+    private val parsedOverrides by lazy { ArtistIdentityResolver.parseOverrides(overrides) }
+
+    /** Only this artist's effective binding participates in its persistent cache. */
+    fun artistCacheToken(name: String): String {
+        val binding = when {
+            !enabled -> "strict"
+            artistIdentityKey(name) in parsedOverrides.rejected -> "rejected"
+            else -> parsedOverrides.ids[artistIdentityKey(name)] ?: "automatic"
+        }
+        return (if (enabled) "aliases-v3-" else "strict-v3-") +
+            identityDigest(binding + "\n" + storefrontOrder.joinToString(","))
+    }
+    internal fun manualId(name: String): String? = if (enabled) parsedOverrides.ids[artistIdentityKey(name)] else null
+    internal fun rejects(name: String): Boolean = enabled && artistIdentityKey(name) in parsedOverrides.rejected
+    internal fun artistCacheStem(name: String): String = normalizeArtistKey(name) + "--${identityDigest(artistIdentityKey(name))}"
+    internal fun legacyArtistCacheKey(name: String): String = artistCacheStem(name) + "--$cacheToken"
+    fun artistCacheKey(name: String): String = artistCacheStem(name) + "--${artistCacheToken(name)}"
 
     companion object {
         const val DEFAULT_STOREFRONTS = "US,JP,CN"
@@ -86,7 +101,7 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
     }
 
     fun resolve(name: String, policy: ArtistIdentityPolicy): String? {
-        val key = policy.cacheToken + "|" + artistIdentityKey(name)
+        val key = policy.artistCacheToken(name) + "|" + artistIdentityKey(name)
         val now = System.currentTimeMillis()
         resolutions[key]?.takeIf { now < it.until }?.let { return it.id }
         val resolved = runCatching { resolveUncached(name, policy) }.onFailure {
@@ -159,7 +174,7 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
     fun searchCandidates(query: String, policy: ArtistIdentityPolicy): List<ArtistMatchCandidate> {
         val name = query.trim()
         if (name.isEmpty() || name.length > 2048) return emptyList()
-        val key = policy.cacheToken + "|" + artistIdentityKey(name)
+        val key = policy.artistCacheToken(name) + "|" + artistIdentityKey(name)
         val now = System.currentTimeMillis()
         searches[key]?.takeIf { now < it.second }?.let { (items, _) ->
             return manualCandidates(items, name)

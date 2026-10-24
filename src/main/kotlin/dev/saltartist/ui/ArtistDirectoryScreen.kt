@@ -248,7 +248,7 @@ private fun DirectoryOption(label: String, selected: Boolean, click: () -> Unit)
 @Composable
 private fun DirectoryPortrait(artist: DirectoryArtist, stats: DirectoryStats, deps: ArtistScreenDeps, modifier: Modifier) {
     val identity = deps.settings.read().identityPolicy
-    val retained = remember(artist.name, identity.cacheToken, deps.artwork.directoryAvatarRevision, artist.coverPath, stats.coverId) {
+    val retained = remember(artist.name, identity.artistCacheToken(artist.name), deps.artwork.directoryAvatarRevision(artist.name), artist.coverPath, stats.coverId) {
         DirectoryPortraitMemory<androidx.compose.ui.graphics.ImageBitmap>()
     }
     val portrait = retained.resolve(deps.artwork.artistAvatar(artist.name, identity)) {

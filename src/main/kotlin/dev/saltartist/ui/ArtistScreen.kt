@@ -146,7 +146,6 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
     fun customHero() {
         val file = pickImageFile() ?: return
         deps.profiles.setPhoto(artistName, file)
-        deps.artwork.invalidateArtist(artistName)
         toast("已设置自定义头图")
         deps.log.log("custom hero: ${file.absolutePath}")
     }
@@ -260,7 +259,7 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
         if (matcherOpen) ArtistMatcher(artistName, palette, deps,
             onClose = { matcherOpen = false },
             onChanged = {
-                deps.artwork.invalidateArtist(artistName)
+                deps.artwork.identityChanged(artistName)
                 deps.profiles.revision.value++
                 matcherOpen = false
                 toast("已更新 Apple Music 匹配")

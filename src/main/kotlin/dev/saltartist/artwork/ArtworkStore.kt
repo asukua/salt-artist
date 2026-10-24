@@ -8,6 +8,9 @@ import dev.saltartist.PluginLog
 import dev.saltartist.am.AppleMusicCatalog
 import dev.saltartist.am.AmArtistDetails
 import dev.saltartist.am.AmArtistMotion
+import dev.saltartist.am.AmArtist
+import dev.saltartist.am.atomicCacheWrite
+import dev.saltartist.am.artistIdentityKey
 import dev.saltartist.am.ArtistLanguagePolicy
 import dev.saltartist.am.ArtistIdentityPolicy
 import dev.saltartist.am.ArtistMatchCandidate
@@ -52,6 +55,10 @@ class ArtworkStore(
     private val appleExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "salt-artist-apple").apply { isDaemon = true }
     }
+    private val appleLocalExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "salt-artist-apple-cache").apply { isDaemon = true }
+    }
+    @Volatile private var closed = false
     private val inFlight = ConcurrentHashMap<String, Boolean>()
     private val requested = AtomicInteger()
 
@@ -110,6 +117,7 @@ class ArtworkStore(
      */
     fun appleArt(artistName: String, policy: ArtistLanguagePolicy = ArtistLanguagePolicy(),
                  identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false)): AmArt? {
+        if (closed) return null
         val cat = catalog ?: return null
         // Each queued request captures its own immutable matching policy. A late
         // result cannot become the image selected after a preference change.
@@ -117,57 +125,38 @@ class ArtworkStore(
         appleCache[key]?.let { hit ->
             if (!hit.retryable || System.currentTimeMillis() - (appleCompletedAt[key] ?: 0L) < EMPTY_RETRY_MS) return hit
         }
-        val artistKey = normalizeArtistKey(artistName)
+        val artistKey = artistIdentityKey(artistName)
         val generation = appleRequests.generation(artistKey)
         val requestKey = "$key|generation=$generation"
         if (appleInFlight.putIfAbsent(requestKey, true) != null) return appleCache[key]
 
         fun publish(value: AmArt) {
-            val published = appleRequests.publish(artistKey, generation) {
+            val published = appleRequests.publish(artistKey, generation) update@{
+                if (closed) return@update
                 appleCompletedAt[key] = System.currentTimeMillis()
-                appleCache[key] = value
+                val previous = appleCache[key]
+                appleCache[key] = if (previous == null) value else value.copy(
+                    hero = value.hero ?: previous.hero, logo = value.logo ?: previous.logo,
+                    avatar = value.avatar ?: previous.avatar, details = value.details ?: previous.details,
+                    motion = if (value.hero != null) value.motion else previous.motion,
+                )
             }
-            // Refresh can race a blocking metadata request. The serial Apple
-            // worker clears its late metadata before the next generation runs.
-            if (!published) cat.forget(artistName)
+            if (published && !closed && value.avatar != null) directoryAvatars.warm(artistName, identity)
         }
 
-        appleExecutor.execute {
+        fun current() = !closed && appleRequests.generation(artistKey) == generation
+        fun mutateCache(action: () -> Unit) {
+            appleRequests.publish(artistKey, generation) { if (!closed) action() }
+        }
+        fun refresh() {
             try {
-                if (appleRequests.generation(artistKey) != generation) return@execute
+                if (!current()) return
                 val meta = cat.resolve(artistName, policy, identity = identity)
                 if (meta == null) {
                     publish(AmArt(null, null))
-                    return@execute
+                    return
                 }
-                val heroBytes = meta.heroTemplate?.let { template ->
-                    loadImage(cat.heroFile(artistName, identity), cat.imageUrl(template, meta.heroCrop, 1600, if (meta.heroIsWide) 800 else 1600))
-                }
-                val logoBytes = meta.logoTemplate?.let { template ->
-                    loadImage(cat.logoFile(artistName, identity), cat.imageUrl(template, meta.logoCrop, 1000, 320, "png"))
-                }
-                val hero = heroBytes?.let { bytes ->
-                    runCatching { decode(bytes) }.onFailure {
-                        cat.heroFile(artistName, identity)?.delete()
-                        log.log("apple-music hero decode failed: ${log.describe(it)}")
-                    }.getOrNull()
-                }
-                val logo = logoBytes?.let { bytes ->
-                    runCatching { downscale(checkedImage(bytes), 1000).toComposeImageBitmap() }
-                        .onFailure { cat.logoFile(artistName, identity)?.delete() }.getOrNull()
-                }
-                val avatar = meta.avatarTemplate?.let { template ->
-                    loadImage(cat.avatarFile(artistName, identity), cat.imageUrl(template, meta.avatarCrop, 900, 900))
-                }?.let { bytes ->
-                    runCatching { downscale(checkedImage(bytes), 900).toComposeImageBitmap() }
-                        .onFailure { cat.avatarFile(artistName, identity)?.delete() }.getOrNull()
-                }
-                if (hero == null && logo == null) {
-                    log.log("apple-music: assets empty for \"$artistName\"")
-                }
-                publish(AmArt(hero, logo, avatar, meta.details, meta.motion,
-                    incompleteImages = (meta.heroTemplate != null && hero == null) ||
-                        (meta.logoTemplate != null && logo == null) || (meta.avatarTemplate != null && avatar == null)))
+                if (current()) publish(readAppleAssets(artistName, identity, meta, network = true, ::mutateCache))
             } catch (t: Throwable) {
                 log.log("apple-music failed for \"$artistName\": ${log.describe(t)}")
                 publish(AmArt(null, null))
@@ -175,7 +164,48 @@ class ArtworkStore(
                 appleInFlight.remove(requestKey)
             }
         }
+        // A cached page never waits behind another artist's profile or image download.
+        runCatching { appleLocalExecutor.execute {
+            var remoteScheduled = false
+            try {
+                if (!current()) return@execute
+                val start = System.nanoTime()
+                val meta = cat.cached(artistName, policy, identity)
+                val local = meta?.let { readAppleAssets(artistName, identity, it, network = false, ::mutateCache) }
+                if (local != null && current()) {
+                    publish(local)
+                    log.logOnce("local-art:$key", "apple-music local assets artist=\"$artistName\" ms=${(System.nanoTime() - start) / 1_000_000}")
+                    if (!local.retryable && cat.cachedIsFresh(artistName, policy, identity)) return@execute
+                }
+                if (current()) { appleExecutor.execute(::refresh); remoteScheduled = true }
+            } catch (error: Throwable) {
+                if (current()) { appleExecutor.execute(::refresh); remoteScheduled = true }
+                log.log("apple-music local cache unavailable: ${log.describe(error)}")
+            } finally { if (!remoteScheduled) appleInFlight.remove(requestKey) }
+        } }.onFailure { appleInFlight.remove(requestKey) }
         return appleCache[key]
+    }
+
+    private fun readAppleAssets(name: String, identity: ArtistIdentityPolicy, meta: AmArtist, network: Boolean,
+                               mutateCache: (() -> Unit) -> Unit): AmArt {
+        val cat = checkNotNull(catalog)
+        fun bytes(file: File?, url: String): ByteArray? = if (network) loadImage(file, url, mutateCache) else file
+            ?.takeIf { it.isFile && it.length() in 1..MAX_IMAGE_BYTES.toLong() }
+            ?.let { runCatching { readLocalImage(it) }.getOrNull() }
+        val hero = meta.heroTemplate?.let { template ->
+            bytes(cat.heroFile(name, identity), cat.imageUrl(template, meta.heroCrop, 1600, if (meta.heroIsWide) 800 else 1600))
+        }?.let { runCatching { decode(it) }.onFailure { mutateCache { cat.heroFile(name, identity)?.delete() } }.getOrNull() }
+        val logo = meta.logoTemplate?.let { template ->
+            bytes(cat.logoFile(name, identity), cat.imageUrl(template, meta.logoCrop, 1000, 320, "png"))
+        }?.let { runCatching { downscale(checkedImage(it), 1000).toComposeImageBitmap() }
+            .onFailure { mutateCache { cat.logoFile(name, identity)?.delete() } }.getOrNull() }
+        val avatar = meta.avatarTemplate?.let { template ->
+            bytes(cat.avatarFile(name, identity), cat.imageUrl(template, meta.avatarCrop, 900, 900))
+        }?.let { runCatching { downscale(checkedImage(it), 900).toComposeImageBitmap() }
+            .onFailure { mutateCache { cat.avatarFile(name, identity)?.delete() } }.getOrNull() }
+        return AmArt(hero, logo, avatar, meta.details, meta.motion,
+            incompleteImages = (meta.heroTemplate != null && hero == null) ||
+                (meta.logoTemplate != null && logo == null) || (meta.avatarTemplate != null && avatar == null))
     }
 
     /**
@@ -184,29 +214,39 @@ class ArtworkStore(
      */
     fun invalidateArtist(artistName: String) {
         val key = normalizeArtistKey(artistName)
-        appleRequests.invalidate(key) {
-            appleCache.keys.filter { it.startsWith("$key|") }.forEach {
+        val stem = ArtistIdentityPolicy().artistCacheStem(artistName)
+        appleRequests.invalidate(artistIdentityKey(artistName)) {
+            appleCache.keys.filter { it.startsWith("$key|$stem--") }.forEach {
                 appleCache.remove(it)
                 appleCompletedAt.remove(it)
             }
+            catalog?.forget(artistName)
+            directoryAvatars.invalidate(artistName)
         }
-        catalog?.forget(artistName)
-        directoryAvatars.invalidate(artistName)
         customPhotoCache.remove(key)
         localPhotoCache.keys.filter { it.startsWith("$key|") }.forEach { localPhotoCache.remove(it) }
     }
 
+    fun identityChanged(artistName: String) {
+        appleRequests.invalidate(artistIdentityKey(artistName)) {
+            catalog?.identityChanged(artistName)
+            directoryAvatars.identityChanged(artistName)
+        }
+    }
+
     /** 磁盘优先；没有就下载一次再落盘。 */
-    private fun loadImage(file: File?, url: String): ByteArray? {
+    private fun loadImage(file: File?, url: String, mutateCache: (() -> Unit) -> Unit): ByteArray? {
         val cat = catalog ?: return null
-        if (file != null && file.isFile && file.length() > 1024) {
+        if (file != null && file.isFile && file.length() > 0) {
             return runCatching { readLocalImage(file) }.getOrNull()
         }
         val bytes = runCatching { download(url) }.getOrNull() ?: return null
         if (file != null && bytes.isNotEmpty()) {
             runCatching {
-                cat.ensureImageDir()
-                file.writeBytes(bytes)
+                mutateCache {
+                    cat.ensureImageDir()
+                    atomicCacheWrite(file, bytes)
+                }
             }.onFailure { log.log("apple-music image write failed: ${log.describe(it)}") }
         }
         return bytes
@@ -345,16 +385,17 @@ class ArtworkStore(
         customPhotoCache.clear()
         localPhotoCache.clear()
         localLogoCache.clear()
-        appleCache.clear()
-        appleCompletedAt.clear()
+        appleRequests.clear { appleCache.clear(); appleCompletedAt.clear() }
         directoryAvatars.clear()
         inFlight.clear()
     }
 
     fun shutdown() {
+        closed = true
         motionCache.close()
         executor.shutdownNow()
         appleExecutor.shutdownNow()
+        appleLocalExecutor.shutdownNow()
         directoryAvatars.close()
     }
 
@@ -362,7 +403,7 @@ class ArtworkStore(
     fun artistAvatar(artistName: String, identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false)): ImageBitmap? =
         directoryAvatars.avatar(artistName, identity)
 
-    internal val directoryAvatarRevision: Long get() = directoryAvatars.revision
+    internal fun directoryAvatarRevision(name: String): Pair<Long, Long> = directoryAvatars.revision(name)
 
     /** Preserve native, user-selected directory covers without creating hero blur caches. */
     fun directoryCover(path: String?): ImageBitmap? {
