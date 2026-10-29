@@ -189,11 +189,13 @@ def main():
                     count = len(re.findall(r"^\s+\d+: invokestatic\s+#" + str(item["cpIndex"]) + r"\s", item_dump, re.MULTILINE))
                     check("one avatar invocation in artist item", count == 1, count)
 
-        if report.get("hostVersion") in ("1.19.1", "1.19.2"):
-            directory = "androidx/compose/ui/\u0417"
-            vm = "androidx/compose/ui/\u05e1"
-            ready = "androidx/compose/ui/\u04db$\u0528"
-            group = "androidx/compose/ui/\u09aa"
+        if report.get("hostVersion") in ("1.19.1", "1.19.2", "1.19.3"):
+            profiles = {
+                "1.19.1": ("\u0417", "\u05e1", "\u04db$\u0528", "\u09aa"),
+                "1.19.2": ("\u0417", "\u05e1", "\u04db$\u0528", "\u09aa"),
+                "1.19.3": ("\u0998", "\u05e6", "\u0c36$\u0528", "\u06cb"),
+            }
+            directory, vm, ready, group = ("androidx/compose/ui/" + n for n in profiles[report["hostVersion"]])
             page_descriptor = "(L" + vm + ";Landroidx/compose/runtime/Composer;II)V"
             dump("directory-screen-020", directory)
             for label, name in (("directory-ready-020", ready), ("directory-group-020", group)):

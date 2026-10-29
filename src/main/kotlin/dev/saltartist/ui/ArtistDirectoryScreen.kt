@@ -230,7 +230,7 @@ private fun DirectorySearch(query: String, onChange: (String) -> Unit, modifier:
         SearchGlyph(directoryMuted)
         Spacer(Modifier.width(8.dp))
         BasicTextField(query, onChange, Modifier.weight(1f).semantics { contentDescription = "搜索艺人" }, singleLine = true,
-            textStyle = TextStyle(color = Color.White, fontSize = 14.sp), cursorBrush = SolidColor(directoryAccent),
+            textStyle = TextStyle(fontFamily = hostFontFamily(), color = Color.White, fontSize = 14.sp), cursorBrush = SolidColor(directoryAccent),
             decorationBox = { field -> Box { if (query.isEmpty()) SaltText("在艺人中搜索", size = 14.sp, color = directoryMuted); field() } })
         if (query.isNotEmpty()) SaltText("×", Modifier.padding(start = 8.dp).clickable { onChange("") }, size = 20.sp, color = directoryMuted)
     }

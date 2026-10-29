@@ -34,6 +34,7 @@ import dev.saltartist.bridge.NavigationBridge
 import dev.saltartist.bridge.PlaybackBridge
 import dev.saltartist.data.ArtistRepository
 import dev.saltartist.hook.HookTargets
+import dev.saltartist.hook.hostArchiveSha256
 import dev.saltartist.settings.ArtistProfileStore
 import dev.saltartist.settings.ArtistSettings
 import dev.saltartist.ui.ArtistScreen
@@ -51,7 +52,7 @@ import java.io.File
  *  2. 按已核实的宿主版本，在艺人页 Composable 的唯一调用点覆盖 [ArtistScreen]；
  *  3. 停用/卸载时释放句柄与线程池，恢复宿主原生艺人页。
  *
- * 未核实的版本不注册 Hook；目标混淆名按版本选择，宿主继续保留原生回退。
+ * 未登记的版本仅在宿主归档与已核实版本完全一致时复用映射，否则保留原生回退。
  */
 @OptIn(UnstableSpwWorkshopApi::class)
 class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) {
@@ -70,12 +71,16 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
         log.log("start plugin=${pluginContext.pluginId} version=${pluginContext.pluginVersion}")
         log.log("host=${pluginContext.spwVersion} channel=${pluginContext.spwChannel} path=${pluginContext.pluginPath}")
 
-        val targets = HookTargets.forHost(pluginContext.spwVersion)
+        val targets = HookTargets.forHostOrIdenticalArchive(pluginContext.spwVersion) {
+            hostArchiveSha256(WorkshopApi::class.java.classLoader)
+        }
         if (targets == null) {
             val supported = HookTargets.supportedHostVersions.joinToString(" / ")
             log.log("host $hostVersion not supported, hooks skipped (verified $supported)")
-            toast("Salt Artist 已核实兼容 Salt Player $supported，当前 $hostVersion")
             return
+        }
+        if (HookTargets.forHost(pluginContext.spwVersion) == null) {
+            log.log("host $hostVersion matched an identical verified archive")
         }
         log.log("host profile=$hostVersion page=${targets.artistPageClass} viewModel=${targets.artistViewModelClass} avatar=${targets.artistAvatarClass}")
         ArtistMotionPlayers.begin()

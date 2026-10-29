@@ -54,6 +54,8 @@
 
 ## 安装与设置
 
+支持已核实的 SPW 1.19.0 至 1.19.3；未知版本若宿主核心归档与已核实版本完全一致，可自动复用映射，否则静默保留原生页面。1.19.3 的宿主界面交互仍需验收。
+
 1. 从 [Releases](https://github.com/asukua/salt-artist/releases/latest) 下载 `.spmod`，在 SPW「模组管理」中导入并启用。
 2. 打开艺人页即可使用。在「Salt Artist → 配置」里调整帧率、清晰度、资料语言和匹配方式。
 3. 艺人页右上角更多菜单可手动匹配、换头图和导入艺术字；列表右上角可调整视图、排序和移除恢复。
@@ -63,7 +65,7 @@
 
 ## 开发
 
-使用 **JDK 25**，运行 `./gradlew test plugin`（Windows：`.\gradlew.bat test plugin`）。产物为 `build/libs/plugin-dev.saltartist-0.2.5.spmod`，首次构建需要联网获取依赖。接入与运行约束见[兼容说明](docs/host-compatibility.md)，实现与设计见[设计文档](docs/artist-design.md)。
+使用 **JDK 25**，运行 `./gradlew test plugin`（Windows：`.\gradlew.bat test plugin`）。产物为 `build/libs/plugin-dev.saltartist-0.2.7.spmod`，首次构建需要联网获取依赖。接入与运行约束见[兼容说明](docs/host-compatibility.md)，实现与设计见[设计文档](docs/artist-design.md)。
 
 ## 致谢
 

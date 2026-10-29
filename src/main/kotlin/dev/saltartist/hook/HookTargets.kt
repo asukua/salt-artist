@@ -76,12 +76,34 @@ object HookTargets {
                 itemClass = "androidx.compose.ui.\u10A5",
             ),
         ),
+        "1.19.3" to HostTargets(
+            artistPageClass = "androidx.compose.ui.\u011A",
+            artistViewModelClass = "androidx.compose.ui.\u0AA2",
+            artistAvatarClass = "androidx.compose.ui.\u097E",
+            directory = DirectoryTargets(
+                screenClass = "androidx.compose.ui.\u0998",
+                itemClass = "androidx.compose.ui.\u0769",
+                viewModelClass = "androidx.compose.ui.\u05E6",
+                readyStateClass = "androidx.compose.ui.\u0C36\$\u0528",
+            ),
+        ),
     )
 
     val supportedHostVersions: Set<String> get() = verifiedHosts.keys
 
     /** 保留宿主渠道/构建后缀的既有处理，未知版本保持原生页。 */
     fun forHost(version: String): HostTargets? = verifiedHosts[version.substringBefore('-')]
+
+    /** Reuse a profile for an unknown version only when its entire archive is identical. */
+    internal fun forHostOrIdenticalArchive(version: String, archiveSha256: () -> String?): HostTargets? {
+        forHost(version)?.let { return it }
+        if (!Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-.+)?").matches(version)) return null
+        return when (archiveSha256()) {
+            "e616a7b0b297a5843695b4bfb5da9c1cc859a71682cc23674963a7b27b9032c1" -> verifiedHosts["1.19.2"]
+            "75eb9f7185acbbb2302fbcf3356d70f08958a410d2eaf32443abedddafa0e9a0" -> verifiedHosts["1.19.3"]
+            else -> null
+        }
+    }
 
     fun isCompatibleHost(version: String): Boolean = forHost(version) != null
 }

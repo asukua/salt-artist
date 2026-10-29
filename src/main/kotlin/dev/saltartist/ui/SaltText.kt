@@ -5,11 +5,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import dev.saltartist.bridge.HostTypography
+
+/** Read in composition so a change to Salt Player's font strategy also updates us. */
+@Composable
+internal fun hostFontFamily(): FontFamily? = HostTypography.textStyleLocal?.current?.fontFamily
 
 /**
  * 统一文本入口。宿主不一定加载 Material3，这里只依赖 foundation 的 BasicText，
@@ -32,6 +38,7 @@ internal fun SaltText(
         text = text,
         modifier = modifier,
         style = TextStyle(
+            fontFamily = hostFontFamily(),
             color = color,
             fontSize = size,
             fontWeight = weight,

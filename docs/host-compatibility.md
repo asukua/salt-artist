@@ -8,20 +8,24 @@
 
 ## 兼容策略
 
-`HookTargets.forHost()` 按版本选择已核实目标，支持 1.19.0、1.19.1、1.19.2 及其 `-` 后缀；未知版本不注册 Hook，保留原生页。当前字节码证据来自 Steam 版，同版本其他渠道仍需核查。
+`HookTargets.forHost()` 按版本选择已核实目标，支持 1.19.0 至 1.19.3 及其 `-` 后缀。未知版本从导航类资源定位宿主归档，不加载目标类，只有整个归档的 SHA-256 与已核实的 Steam 1.19.2 或 1.19.3 归档完全一致时才复用映射；读取失败或其他归档均静默保留原生页。整包变化仍需重新核实；不能仅靠类名存在或部分签名推断职责未变。已登记版本按版本映射，其他渠道仍需核查。
 
 混淆名会随升级变化，旧类也可能仍然存在。1.19.1 中仍可找到 1.19.0 的旧艺人页和 ViewModel 名称，但它们已不对应艺人页，因此不使用“兼容整个 1.19.x”或“类存在即兼容”的判断。
 
-| 目标 | 1.19.0 | 1.19.1 / 1.19.2 |
-| --- | --- | --- |
-| 艺人页 | `androidx.compose.ui.ķ` / U+0137 | `androidx.compose.ui.θ` / U+03B8 |
-| ViewModel | `androidx.compose.ui.Ź` / U+0179 | `androidx.compose.ui.Ⴉ` / U+10A9 |
-| 头像 | `androidx.compose.ui.ș` / U+0219 | `androidx.compose.ui.ࡃ` / U+0843 |
-| 方法名 | `Ϳ` / U+037F | `Ϳ` / U+037F |
+| 目标 | 1.19.0 | 1.19.1 / 1.19.2 | 1.19.3 |
+| --- | --- | --- | --- |
+| 艺人页 | `androidx.compose.ui.ķ` / U+0137 | `androidx.compose.ui.θ` / U+03B8 | U+011A |
+| ViewModel | `androidx.compose.ui.Ź` / U+0179 | `androidx.compose.ui.Ⴉ` / U+10A9 | U+0AA2 |
+| 头像 | `androidx.compose.ui.ș` / U+0219 | `androidx.compose.ui.ࡃ` / U+0843 | U+097E |
+| 方法名 | `Ϳ` / U+037F | `Ϳ` / U+037F | U+037F |
 
 导航调用者为 `com.xuncorp.voxzen.ui.navigation.ComposableSingletons$AppNavigation_desktopKt`。艺人页 JVM 描述符为 `(ScreenRoute$ArtistContent, 对应版ViewModel, Composer, int, int) -> void`；Workshop 参数列表只传前两个业务参数。头像描述符为 `(Artist, Modifier, Composer, int, int) -> void`。
 
 ## 界面与播放接入
+
+0.2.6 的普通文本、无图片艺术字时的艺人标题和输入框只继承宿主字体族，保留插件自己的字号、字重和颜色。1.19.2 的 Salt UI `ContentStyle.kt` 将 `LocalTextStyle` 暴露为 `androidx.compose.ui.\u10C7.\u0528()`；AppTheme 按字体策略选出的 MiSans Regular 等字体由该 CompositionLocal 传递。桥接在首次组合时延迟解析，校验静态无参签名及 `CompositionLocal<TextStyle>` 类型；组合中读取当前值以跟随设置变化。缺类或契约不符时回退系统字体，不加载／分发字体文件，也不新增 Hook。图片艺术字保持原图。
+
+独立 Compose／Skia 场景使用宿主实际 LocalTextStyle 与内置 MiSans，确认普通文本、列表搜索、歌曲搜索、编辑框和无艺术字标题均继承字体，运行中切换字体与系统回退也能同步；166 项既有测试及 `test plugin` 通过。本地证据在 `build/reports/font-026/`，宿主界面仍由用户验收。
 
 主页面采用 `afterComposable` 整页覆盖，位于原生艺人内容之上、宿主迷你播放器之下。相同调用点的 `replaceComposable` 曾注册成功却从不组合插件内容；`afterComposable` 已有实际渲染证据，所以保留覆盖方案。更换方案前必须重新确认组合行为，不能仅看注册结果。
 
@@ -64,11 +68,18 @@
 - 原始曲库 Library 实现的唯一 `Function1` 访问器、Continuation 查询及 `Track.getId()` / `getAddedTime()` 保持不变，相关 8 个 class 与 1.19.1 字节一致。查询服务 `androidx.compose.ui.ۋ` 整类有变化，实际使用的查询方法仍直接委托同一 DAO；不据此认定整个服务未变。
 - 0.1.6 显式登记 1.19.2，保留旧版映射；该结果不扩展到尚未核实的 1.19.3 或其他版本。
 
+## 1.19.3 字节码与隔离验证
+
+- 本机 Steam 归档为 111,314,231 字节，SHA-256 `75eb9f7185acbbb2302fbcf3356d70f08958a410d2eaf32443abedddafa0e9a0`。脚本核实主页面、播放导航签名及艺人列表调用。
+- 列表 screen U+0998、item U+0769、ViewModel U+05E6、Ready U+0C36/U+0528、分组 U+06CB；StateFlow getter 仍为 U+052A。实际宿主定位器的隔离检查确认唯一导航调用和 getter 可定位，并复现旧 Success 调用歧义；Ready 和 Group 各有唯一 List 字段。
+- 宿主字体桥在独立 JVM 中返回了 1.19.3 实际 LocalTextStyle；Workshop API dev22 的 37 个 class 的公开成员均存在。169 项自动测试及构建通过。上述结果不能替代安装后在宿主界面验证列表、播放、动态视频和字体。
+- 未来版本只在整个归档字节一致时自动复用：旧混淆类残留、局部签名相同都不足以证明调用职责未变，整包变动时保留原生页并仅写日志。
+
 复核脚本只读取归档与 class，并通过 `javap` 反汇编，不加载目标进宿主 JVM。设置 `JAVA_HOME` 为 JDK 25，将路径改为自己的宿主归档：
 
 ```powershell
 $env:SPW_JAR = "C:\path\to\Salt Player for Windows\app\ffmpeg-x64.dll"
-python scripts/verify-host.py --jar $env:SPW_JAR --java-home $env:JAVA_HOME --output build/reports/host-compatibility/1.19.2
+python scripts/verify-host.py --jar $env:SPW_JAR --java-home $env:JAVA_HOME --output build/reports/host-compatibility/1.19.3
 ```
 
 输出包含 `evidence.json`、提取的 class 与反汇编；契约不满足时返回非零。新增版本仍需人工对照 `HookTargets` 并做宿主运行检查。提取的宿主 class 不随插件分发。

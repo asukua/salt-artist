@@ -479,7 +479,7 @@ private fun CatalogSearch(query: String, palette: ArtworkPalette, onQueryChange:
             onValueChange = onQueryChange,
             modifier = Modifier.weight(1f).focusRequester(focusRequester),
             singleLine = true,
-            textStyle = TextStyle(color = palette.onBackdrop, fontSize = 12.sp),
+            textStyle = TextStyle(fontFamily = hostFontFamily(), color = palette.onBackdrop, fontSize = 12.sp),
             cursorBrush = SolidColor(palette.accent),
             decorationBox = { inner ->
                 if (query.isEmpty()) {

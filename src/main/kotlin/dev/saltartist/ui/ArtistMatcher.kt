@@ -110,7 +110,7 @@ internal fun ArtistMatcher(
                     value = query,
                     onValueChange = { query = it.take(2048) },
                     singleLine = true,
-                    textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
+                    textStyle = TextStyle(fontFamily = hostFontFamily(), color = Color.White, fontSize = 14.sp),
                     cursorBrush = SolidColor(Color.White),
                     modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
                         .background(Color.White.copy(alpha = 0.07f)).padding(12.dp),

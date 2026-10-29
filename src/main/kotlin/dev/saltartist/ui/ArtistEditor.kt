@@ -314,6 +314,7 @@ private fun EditorField(
             },
             singleLine = true,
             textStyle = TextStyle(
+                fontFamily = hostFontFamily(),
                 color = Color.White.copy(alpha = 0.92f),
                 fontSize = if (compact) 12.sp else 13.sp,
             ),

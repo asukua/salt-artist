@@ -234,6 +234,7 @@ internal fun ArtistHero(
                     text = name,
                     modifier = Modifier.widthIn(max = 780.dp),
                     style = TextStyle(
+                        fontFamily = hostFontFamily(),
                         color = Color.White,
                         fontSize = if (compact) 46.sp else 62.sp,
                         lineHeight = if (compact) 50.sp else 66.sp,

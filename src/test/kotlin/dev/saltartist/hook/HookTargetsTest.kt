@@ -11,14 +11,14 @@ import kotlin.test.assertTrue
 class HookTargetsTest {
     @Test
     fun acceptsVerifiedHostVersions() {
-        listOf("1.19.0", "1.19.1", "1.19.2").forEach { version ->
+        listOf("1.19.0", "1.19.1", "1.19.2", "1.19.3").forEach { version ->
             assertTrue(HookTargets.isCompatibleHost(version), version)
         }
     }
 
     @Test
     fun acceptsExistingHyphenatedVersionSuffixes() {
-        listOf("1.19.0-Steam", "1.19.1-Steam", "1.19.1-dev-build", "1.19.2-Steam", "1.19.2-dev-build").forEach { version ->
+        listOf("1.19.0-Steam", "1.19.1-Steam", "1.19.1-dev-build", "1.19.2-Steam", "1.19.2-dev-build", "1.19.3-Steam").forEach { version ->
             assertTrue(HookTargets.isCompatibleHost(version), version)
             assertEquals(HookTargets.forHost(version.substringBefore('-')), HookTargets.forHost(version), version)
         }
@@ -27,7 +27,7 @@ class HookTargetsTest {
     @Test
     fun rejectsUnverifiedVersionsAndMalformedValues() {
         listOf(
-            "1.18.9", "1.19.3", "1.20.0", "2.0.0", "", "1.19", "1.19.2foo",
+            "1.18.9", "1.19.4", "1.20.0", "2.0.0", "", "1.19", "1.19.2foo",
             "v1.19.2", " 1.19.2", "1.19.2 ",
         ).forEach { version ->
             assertFalse(HookTargets.isCompatibleHost(version), version)
@@ -50,6 +50,30 @@ class HookTargetsTest {
         assertNotEquals(oldHost.artistViewModelClass, currentHost.artistViewModelClass)
         assertNotEquals(oldHost.artistAvatarClass, currentHost.artistAvatarClass)
         assertEquals(HookTargets.forHost("1.19.1"), currentHost)
+    }
+
+    @Test
+    fun selectsNewHostTargetsIncludingEnhancedDirectory() {
+        val targets = assertNotNull(HookTargets.forHost("1.19.3"))
+        assertEquals("androidx.compose.ui.\u011A", targets.artistPageClass)
+        assertEquals("androidx.compose.ui.\u0AA2", targets.artistViewModelClass)
+        assertEquals("androidx.compose.ui.\u097E", targets.artistAvatarClass)
+        val directory = assertNotNull(targets.directory)
+        assertEquals("androidx.compose.ui.\u0998", directory.screenClass)
+        assertEquals("androidx.compose.ui.\u0769", directory.itemClass)
+        assertEquals("androidx.compose.ui.\u05E6", directory.viewModelClass)
+        assertEquals("androidx.compose.ui.\u0C36\$\u0528", directory.readyStateClass)
+        assertEquals("\u052A", directory.stateFlowMethod)
+    }
+
+    @Test
+    fun unknownVersionRequiresAnIdenticalVerifiedArchive() {
+        val hash = "75eb9f7185acbbb2302fbcf3356d70f08958a410d2eaf32443abedddafa0e9a0"
+        assertEquals(HookTargets.forHost("1.19.3"), HookTargets.forHostOrIdenticalArchive("1.19.4-Steam") { hash })
+        assertNull(HookTargets.forHostOrIdenticalArchive("1.19.4") { "different" })
+        assertNull(HookTargets.forHostOrIdenticalArchive("1.19.4") { null })
+        assertNull(HookTargets.forHostOrIdenticalArchive("invalid") { hash })
+        assertEquals(HookTargets.forHost("1.19.3"), HookTargets.forHostOrIdenticalArchive("1.19.3") { error("unnecessary hash") })
     }
 
     @Test
