@@ -26,6 +26,8 @@ data class ArtistAlbum(
     val tracks: List<ArtistTrack>,
 ) {
     val coverTrackId: String get() = tracks.firstOrNull { it.id.isNotBlank() }?.id.orEmpty()
+    /** 与宿主歌曲菜单一致：原始专辑名与完整专辑艺人，即使为空也原样传递。 */
+    internal fun hostRoute(): Pair<String, String>? = tracks.firstOrNull()?.let { it.album to it.albumArtist }
     val trackCount: Int get() = tracks.size
     val durationMs: Long get() = tracks.sumOf { it.durationMs }
     val latestLibraryAddedTime: Long get() = tracks.maxOfOrNull { it.libraryAddedTime.coerceAtLeast(0L) } ?: 0L

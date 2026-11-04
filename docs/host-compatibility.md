@@ -33,7 +33,11 @@
 
 注册前不能用 `Class.forName` 预加载转换目标，`initialize=false` 也会加载类，可能错过首次转换。播放与导航反射维持延迟执行。dev23 的 `HookRegistrar` 无匹配次数或签名验证 API，`HookHandle` 只能证明注册成功。
 
-播放使用 `PlaybackController.setPlaybackQueue`。专辑点击直接播放整张：手工以名称构造 `AlbumContent` 曾导航成功却只显示空白页，需取得可靠的宿主 Album 实体来源并验证后，才能恢复专辑导航。
+播放使用 `PlaybackController.setPlaybackQueue`。点击专辑卡片导航到宿主 `AlbumContent`；卡片播放按钮仅播放，不触发导航。曾以插件聚合的显示名与截断艺人构造路由，导航后出现空白页。1.19.3 宿主字节码中，歌曲入口直接传 `Track.getAlbum()` 和 `Track.getAlbumArtist()`，专辑入口传 `Album.getTitle()` 和 `Album.getArtist()`；因此插件现使用原始曲目的完整专辑名和专辑艺人，保留空值，不使用插件自定义名称或截断艺人。该参数来源已根据字节码核实，宿主交互仍需实际验收。
+
+## 播放命令顺序
+
+1.19.3 的原生歌曲、艺人播放入口按顺序调用 `PlaybackController.setPlaybackQueue`、`prepare`、`play`。插件过去漏掉 `prepare`：上首正在播放时切换曲目可能只切歌而不出声。0.2.9 尝试在切歌后检查并补发播放，但实际日志显示检查超时，未解决问题；0.2.10 移除该补发，改用宿主原生的三步顺序，避免延迟重试干扰手动暂停。上述原生调用顺序已根据字节码核实；能否消除实际故障仍需宿主测试。
 
 ## 动态头图运行时约束
 

@@ -54,7 +54,7 @@ import dev.saltartist.data.ArtistTrack
 import dev.saltartist.data.formatDuration
 import dev.saltartist.data.selectLatestAddedAlbum
 
-/** 紧凑的发行与曲库区域，所有播放操作均复用页面提供的宿主队列入口。 */
+/** 紧凑的发行与曲库区域，专辑入口打开详情，播放操作复用页面提供的宿主队列入口。 */
 @Composable
 internal fun ArtistCatalog(
     model: ArtistPageModel,
@@ -65,6 +65,7 @@ internal fun ArtistCatalog(
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
     onPlayTrack: (ArtistTrack) -> Unit,
+    onOpenAlbum: (ArtistAlbum) -> Unit,
     onPlayAlbum: (ArtistAlbum) -> Unit,
     onShuffle: () -> Unit,
 ) {
@@ -103,6 +104,7 @@ internal fun ArtistCatalog(
                                 album = latestAddedAlbum ?: albums.first(),
                                 deps = deps,
                                 palette = palette,
+                                onOpen = { onOpenAlbum(latestAddedAlbum ?: albums.first()) },
                                 onPlay = { onPlayAlbum(latestAddedAlbum ?: albums.first()) },
                                 modifier = Modifier.width(272.dp),
                             )
@@ -129,6 +131,7 @@ internal fun ArtistCatalog(
                                 album = latestAddedAlbum ?: albums.first(),
                                 deps = deps,
                                 palette = palette,
+                                onOpen = { onOpenAlbum(latestAddedAlbum ?: albums.first()) },
                                 onPlay = { onPlayAlbum(latestAddedAlbum ?: albums.first()) },
                                 modifier = Modifier.widthIn(max = 380.dp).fillMaxWidth(),
                             )
@@ -163,6 +166,7 @@ internal fun ArtistCatalog(
                                         album = album,
                                         deps = deps,
                                         palette = palette,
+                                        onOpen = { onOpenAlbum(album) },
                                         onPlay = { onPlayAlbum(album) },
                                         modifier = Modifier.weight(1f),
                                     )
@@ -183,6 +187,7 @@ private fun LatestAdded(
     album: ArtistAlbum,
     deps: ArtistScreenDeps,
     palette: ArtworkPalette,
+    onOpen: () -> Unit,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -197,7 +202,7 @@ private fun LatestAdded(
                 .background(Color.White.copy(alpha = if (hovered) 0.035f else 0f))
                 .hoverable(interaction)
                 .pointerHoverIcon(PointerIcon.Hand)
-                .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onPlay),
+                .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onOpen),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             CatalogCover(album.coverTrackId, deps, palette, Modifier.size(112.dp), radius = 5)
@@ -212,7 +217,9 @@ private fun LatestAdded(
                 Spacer(Modifier.height(10.dp))
                 Box(
                     Modifier.size(25.dp).clip(CircleShape)
-                        .background(Color.White.copy(alpha = if (hovered) 0.18f else 0.09f)),
+                        .background(Color.White.copy(alpha = if (hovered) 0.18f else 0.09f))
+                        .semantics { contentDescription = "播放专辑" }
+                        .clickable(role = Role.Button, onClick = onPlay),
                     contentAlignment = Alignment.Center,
                 ) {
                     PlayGlyph(palette.onBackdrop, 10.dp)
@@ -313,7 +320,7 @@ private fun CatalogSongs(
 }
 
 @Composable
-private fun CatalogTrack(
+internal fun CatalogTrack(
     track: ArtistTrack,
     deps: ArtistScreenDeps,
     palette: ArtworkPalette,
@@ -376,6 +383,7 @@ private fun CatalogAlbum(
     album: ArtistAlbum,
     deps: ArtistScreenDeps,
     palette: ArtworkPalette,
+    onOpen: () -> Unit,
     onPlay: () -> Unit,
     modifier: Modifier,
 ) {
@@ -384,7 +392,7 @@ private fun CatalogAlbum(
     Column(
         modifier.clip(RoundedCornerShape(5.dp))
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
-            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onPlay),
+            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onOpen),
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
             CatalogCover(album.coverTrackId, deps, palette, Modifier.fillMaxSize(), radius = 5)
@@ -392,7 +400,9 @@ private fun CatalogAlbum(
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.08f)))
                 Box(
                     Modifier.align(Alignment.BottomEnd).padding(9.dp).size(28.dp)
-                        .clip(CircleShape).background(Color.Black.copy(alpha = 0.48f)),
+                        .clip(CircleShape).background(Color.Black.copy(alpha = 0.48f))
+                        .semantics { contentDescription = "播放专辑" }
+                        .clickable(role = Role.Button, onClick = onPlay),
                     contentAlignment = Alignment.Center,
                 ) {
                     PlayGlyph(Color.White, 12.dp)
@@ -414,7 +424,7 @@ private fun CatalogAlbum(
 }
 
 @Composable
-private fun CatalogCover(
+internal fun CatalogCover(
     trackId: String,
     deps: ArtistScreenDeps,
     palette: ArtworkPalette,

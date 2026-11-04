@@ -12,8 +12,8 @@ import java.lang.reflect.Method
  * `com.xuncorp.pisces.PiscesMediaItem(id, title, artist, album, albumArtist, path)`。
  *
  * 这里用反射复用宿主播放控制器：队列、播放状态、底部迷你播放器、续播都由宿主维护，
- * 插件只负责把本地曲库里的歌曲喂进队列。任何一步失败都返回 false，调用方回退到
- * 「不改变播放状态」，不会把宿主搞进异常状态。
+ * 插件只负责按宿主顺序提交队列、准备和播放命令。同步调用失败时返回 false；
+ * 命令的实际执行与播放状态由宿主异步处理。
  */
 class PlaybackBridge(private val log: PluginLog) {
     private val controller: Any? by lazy {
@@ -85,37 +85,50 @@ class PlaybackBridge(private val log: PluginLog) {
             return false
         }
 
-        val withIndex = setQueueWithIndex
-        if (withIndex != null) {
-            val ok = runCatching { withIndex.invoke(controller, playable, targetIndex) }.isSuccess
-            log.log("playback setPlaybackQueue(list=${playable.size}, index=$targetIndex) ok=$ok")
-            if (ok) {
-                resume()
-                return true
-            }
+        // Match SPW's own playback actions: queue -> prepare -> play.
+        // All three commands are submitted in order to the host service.
+        val prepare = HostReflection.noArgMethod(controller, "prepare")
+        if (prepare == null) {
+            log.log("playback prepare unavailable")
+            return false
         }
-        val single = setQueueSingle
-        val first = playable.getOrNull(targetIndex)
-        if (single != null && first != null) {
-            val ok = runCatching { single.invoke(controller, first) }.isSuccess
-            log.log("playback setPlaybackQueue(item) ok=$ok")
-            if (ok) resume()
-            return ok
-        }
-        return false
-    }
-
-    /**
-     * 队列写入后补一次 play()：宿主在某些状态下只入队不起播，底部迷你播放器也就不会出现。
-     * 已经在播放时这次调用是幂等的。
-     */
-    private fun resume() {
-        val ok = runCatching { WorkshopApi.playback.play() }.isSuccess
-        log.logOnce("playback-resume", "playback resume() ok=$ok")
+        return submitPlayback(
+            enqueue = {
+                val listOk = setQueueWithIndex?.let { method ->
+                    runCatching { method.invoke(controller, playable, targetIndex) }.isSuccess
+                } ?: false
+                log.log("playback setPlaybackQueue(list=${playable.size}, index=$targetIndex) ok=$listOk")
+                if (listOk) true else {
+                    val single = setQueueSingle
+                    val first = playable.getOrNull(targetIndex)
+                    val singleOk = single != null && first != null &&
+                        runCatching { single.invoke(controller, first) }.isSuccess
+                    log.log("playback setPlaybackQueue(item) ok=$singleOk")
+                    singleOk
+                }
+            },
+            prepare = {
+                runCatching { prepare.invoke(controller) }.isSuccess.also {
+                    log.log("playback prepare() submitted=$it")
+                }
+            },
+            play = {
+                runCatching { WorkshopApi.playback.play() }.isSuccess.also {
+                    log.log("playback play() submitted=$it")
+                }
+            },
+        )
     }
 
     private companion object {
         const val CONTROLLER_CLASS = "com.xuncorp.voxzen.service.PlaybackController"
         const val ITEM_CLASS = "com.xuncorp.pisces.PiscesMediaItem"
     }
+}
+
+/** Queue, prepare and play must be submitted in the same order as the native host. */
+internal fun submitPlayback(enqueue: () -> Boolean, prepare: () -> Boolean, play: () -> Boolean): Boolean {
+    if (!enqueue()) return false
+    if (!prepare()) return false
+    return play()
 }

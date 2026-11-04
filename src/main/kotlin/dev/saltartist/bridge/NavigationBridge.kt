@@ -43,7 +43,7 @@ class NavigationBridge(private val log: PluginLog) {
 
     /** 打开宿主原生专辑页；原生页保留专辑内歌曲与播放能力。 */
     fun openAlbum(navigator: Any?, albumTitle: String, artist: String): Boolean {
-        if (navigator == null || albumTitle.isBlank()) return false
+        if (navigator == null) return false
         val route = runCatching {
             val type = Class.forName(ALBUM_ROUTE_CLASS)
             type.getConstructor(String::class.java, String::class.java)

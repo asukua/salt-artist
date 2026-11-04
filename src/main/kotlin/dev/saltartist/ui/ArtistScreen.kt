@@ -124,6 +124,12 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
         deps.log.log("play album \"${album.title}\" tracks=${album.trackCount} ok=$ok")
         if (!ok) toast("无法写入宿主播放队列", warning = true)
     }
+    fun openAlbum(album: ArtistAlbum): Boolean {
+        val route = album.hostRoute()
+        val ok = route != null && deps.navigation.openAlbum(navigator, route.first, route.second)
+        if (!ok) toast("无法打开宿主专辑页", warning = true)
+        return ok
+    }
     fun shuffle() {
         if (model.tracks.isEmpty()) return
         val ok = deps.playback.play(model.tracks.shuffled(), 0)
@@ -229,6 +235,7 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
                         val index = model.tracks.indexOfFirst { it.id == track.id }
                         playAt(index.coerceAtLeast(0))
                     },
+                    onOpenAlbum = { openAlbum(it) },
                     onPlayAlbum = ::playAlbum,
                     onShuffle = ::shuffle,
                 )

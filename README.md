@@ -65,7 +65,7 @@
 
 ## 开发
 
-使用 **JDK 25**，运行 `./gradlew test plugin`（Windows：`.\gradlew.bat test plugin`）。产物为 `build/libs/plugin-dev.saltartist-0.2.7.spmod`，首次构建需要联网获取依赖。接入与运行约束见[兼容说明](docs/host-compatibility.md)，实现与设计见[设计文档](docs/artist-design.md)。
+使用 **JDK 25**，运行 `./gradlew test plugin`（Windows：`.\gradlew.bat test plugin`）。产物为 `build/libs/plugin-dev.saltartist-0.2.10.spmod`，首次构建需要联网获取依赖。接入与运行约束见[兼容说明](docs/host-compatibility.md)，实现与设计见[设计文档](docs/artist-design.md)。
 
 ## 致谢
 
