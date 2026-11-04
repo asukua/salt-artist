@@ -75,9 +75,9 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
     val resolvedArtwork = if (customPhoto != null) {
         deps.artwork.localPhoto(artistName, customPhoto)
     } else {
-        deps.artwork.artworkFor(artistName, rawModel.heroTrackId, settings.languagePolicy, settings.identityPolicy)
+        deps.artwork.artworkFor(artistName, rawModel.heroTrackId, settings.languagePolicy, settings.identityPolicy, settings.visualPolicy)
     }
-    val amArt = deps.artwork.appleArt(artistName, settings.languagePolicy, settings.identityPolicy)
+    val amArt = deps.artwork.appleArt(artistName, settings.languagePolicy, settings.identityPolicy, settings.visualPolicy)
     val artwork = resolvedArtwork ?: amArt?.hero ?: deps.artwork.heroCover(rawModel.heroTrackId)
     val palette = artwork?.palette ?: ArtworkPalette.Fallback
     val motion = amArt?.motion?.takeIf {

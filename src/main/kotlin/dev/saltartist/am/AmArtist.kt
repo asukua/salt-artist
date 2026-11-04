@@ -9,6 +9,25 @@ data class ArtistLanguagePolicy(
     val showOtherLanguages: Boolean = true,
 )
 
+/** Independent source for the artist hero and its matching motion poster. */
+data class ArtistVisualPolicy(
+    val storefront: String = DEFAULT_STOREFRONTS,
+    val language: PreferredArtistLanguage = PreferredArtistLanguage.ENGLISH,
+) {
+    /** Preserve explicit ordering; unknown and repeated regions are ignored. */
+    val countries: List<String> = storefront.split(Regex("[,;，；\\s]+"))
+        .map { it.trim().uppercase(java.util.Locale.ROOT) }
+        .filter { it.length == 2 && it in ISO_COUNTRIES }
+        .distinct().take(8).ifEmpty { DEFAULT_STOREFRONTS.split(',') }
+    val country: String get() = countries.first()
+    val token: String get() = "${countries.joinToString("-")}-${language.code}"
+
+    companion object {
+        const val DEFAULT_STOREFRONTS = "US,JP,CN"
+        private val ISO_COUNTRIES = java.util.Locale.getISOCountries().toSet()
+    }
+}
+
 data class AvatarMetadata(val artistId: String, val template: String, val crop: String = "bb")
 
 enum class AmMotionKind { HLS, MP4 }

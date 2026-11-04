@@ -56,16 +56,16 @@ class ArtistIdentityTest {
     }
 
     @Test
-    fun enabledRequiresUniqueExactIdentityAcrossStorefrontsWhileDisabledStaysExact() {
+    fun enabledAutomaticallySelectsBetweenSameNamesWhileDisabledStaysExact() {
         val urls = arrayListOf<String>()
         val resolver = ArtistIdentityResolver({ url ->
             urls += url
             if ("country=US" in url) result("43", "Solo Artist") else result("42", "Solo Artist")
         }, log)
-        assertNull(resolver.resolve("Solo Artist", enabled))
+        assertEquals("42", resolver.resolve("Solo Artist", enabled))
         val before = urls.size
-        assertNull(resolver.resolve("Solo Artist", enabled))
-        assertEquals(before, urls.size, "Ambiguous results should be cached briefly")
+        assertEquals("42", resolver.resolve("Solo Artist", enabled))
+        assertEquals(before, urls.size, "The automatic choice should be cached")
         assertEquals("43", resolver.resolve("Solo Artist", strict))
     }
 

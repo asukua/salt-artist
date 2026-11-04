@@ -19,6 +19,8 @@ class ArtistSettingsTest {
         assertEquals("", settings.artistIdentityOverrides)
         assertEquals(listOf("US", "JP", "CN"), settings.identityPolicy.storefrontOrder)
         assertTrue(settings.animatedHero)
+        assertEquals(listOf("US", "JP", "CN"), settings.visualPolicy.countries)
+        assertEquals(PreferredArtistLanguage.ENGLISH, settings.visualPolicy.language)
     }
 
     @Test
@@ -31,6 +33,8 @@ class ArtistSettingsTest {
             ArtistSettings.KEY_IDENTITY_OVERRIDES to "初音未来=307078957",
             ArtistSettings.KEY_STOREFRONTS to "CN,US,JP",
             ArtistSettings.KEY_ANIMATED_HERO to false,
+            ArtistSettings.KEY_VISUAL_STOREFRONT to " jp ",
+            ArtistSettings.KEY_VISUAL_LANGUAGE to "CHINESE",
         ))
         assertEquals(PreferredArtistLanguage.ENGLISH, settings.languagePolicy.preferredLanguage)
         assertFalse(settings.languagePolicy.showOtherLanguages)
@@ -39,6 +43,9 @@ class ArtistSettingsTest {
         assertEquals("初音未来=307078957", settings.artistIdentityOverrides)
         assertEquals(listOf("CN", "US", "JP"), settings.identityPolicy.storefrontOrder)
         assertFalse(settings.animatedHero)
+        assertEquals("JP", settings.visualPolicy.country)
+        assertEquals(PreferredArtistLanguage.CHINESE, settings.visualPolicy.language)
+        assertEquals(PreferredArtistLanguage.ENGLISH, settings.languagePolicy.preferredLanguage)
         assertEquals(PreferredArtistLanguage.JAPANESE,
             artistSettingsFromValues(mapOf(ArtistSettings.KEY_LANGUAGE to "ja-JP")).preferredLanguage)
     }
@@ -53,6 +60,8 @@ class ArtistSettingsTest {
             ArtistSettings.KEY_IDENTITY_OVERRIDES to listOf("not a string"),
             ArtistSettings.KEY_STOREFRONTS to 123,
             ArtistSettings.KEY_ANIMATED_HERO to "false",
+            ArtistSettings.KEY_VISUAL_STOREFRONT to "../../evil",
+            ArtistSettings.KEY_VISUAL_LANGUAGE to "unknown",
         ))
         assertEquals(PreferredArtistLanguage.CHINESE, settings.preferredLanguage)
         assertTrue(settings.showOtherLanguages)
@@ -61,6 +70,8 @@ class ArtistSettingsTest {
         assertEquals("", settings.artistIdentityOverrides)
         assertEquals(listOf("US", "JP", "CN"), settings.identityPolicy.storefrontOrder)
         assertTrue(settings.animatedHero)
+        assertEquals("US", settings.visualPolicy.country)
+        assertEquals(PreferredArtistLanguage.ENGLISH, settings.visualPolicy.language)
     }
 
     @Test

@@ -30,8 +30,10 @@ data class ArtistIdentityPolicy(
             artistIdentityKey(name) in parsedOverrides.rejected -> "rejected"
             else -> parsedOverrides.ids[artistIdentityKey(name)] ?: "automatic"
         }
-        return (if (enabled) "aliases-v3-" else "strict-v3-") +
-            identityDigest(binding + "\n" + storefrontOrder.joinToString(","))
+        // Only automatic aliases need a fresh namespace for the new ranking.
+        // Explicit IDs and strict-mode results retain their existing cache.
+        val prefix = if (!enabled) "strict-v3-" else if (binding == "automatic") "aliases-v4-" else "aliases-v3-"
+        return prefix + identityDigest(binding + "\n" + storefrontOrder.joinToString(","))
     }
     internal fun manualId(name: String): String? = if (enabled) parsedOverrides.ids[artistIdentityKey(name)] else null
     internal fun rejects(name: String): Boolean = enabled && artistIdentityKey(name) in parsedOverrides.rejected
@@ -121,40 +123,61 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
             GROUPS.firstOrNull { wanted in it.names }?.let { group ->
                 return group.id.takeIf { verifiedNames(it, policy, group.names).any(group.names::contains) }
             }
+            // Variants in the extended table may reuse an already verified ID,
+            // but an unrelated lookup name can never validate that mapping.
+            ArtistAliasRegistry.groupsFor(name).firstOrNull { it.id != null }?.let { group ->
+                val id = checkNotNull(group.id)
+                if (verifiedNames(id, policy, group.names).any(group.names::contains)) return id
+            }
         }
         val candidates = arrayListOf<ArtistSearchCandidate>()
-        for (country in health.attempts(policy.storefrontOrder)) {
-            val url = "https://itunes.apple.com/search?term=${URLEncoder.encode(name, "UTF-8")}" +
-                "&entity=musicArtist&attribute=artistTerm&country=$country&limit=8"
-            val found = fetch(url)?.let(AppleMusicPageParser::artistSearchCandidatesOrNull)
-            if (found == null) {
-                // Search availability is regional. Continue after an empty,
-                // unavailable or malformed response; never turn it into a match.
-                health.unavailable(country, policy.storefrontOrder)
-                continue
+        val ranked = linkedMapOf<String, CandidateSignals>()
+        fun search(term: String, regions: Sequence<String>) {
+            for (country in regions) {
+                val url = "https://itunes.apple.com/search?term=${URLEncoder.encode(term, "UTF-8")}" +
+                    "&entity=musicArtist&attribute=artistTerm&country=$country&limit=8"
+                val found = fetch(url)?.let(AppleMusicPageParser::artistSearchCandidatesOrNull)
+                if (found == null) {
+                    health.unavailable(country, policy.storefrontOrder)
+                    continue
+                }
+                candidates += found
+                found.forEachIndexed { index, candidate ->
+                    val matches = if (policy.enabled) artistNamesMatch(name, candidate.name)
+                        else artistIdentityKey(candidate.name) == wanted
+                    if (matches) ranked.getOrPut(candidate.id) { CandidateSignals(candidate) }
+                        .recordSearch(country, index)
+                }
+                // Strict mode preserves its existing first-region exact behavior.
+                if (!policy.enabled && ranked.isNotEmpty()) return
             }
-            candidates += found
-            val matches = candidates.filter { artistIdentityKey(it.name) == wanted }.map { it.id }.distinct()
-            // Disabled recognition keeps the previous small exact-name path, but
-            // rejects multiple same-name IDs within the returned storefront.
-            if (!policy.enabled && matches.isNotEmpty()) return matches.singleOrNull()
-            if (matches.size > 1) return null
         }
-        val exact = candidates.filter { artistIdentityKey(it.name) == wanted }.map { it.id }.distinct()
-        if (exact.isNotEmpty()) return exact.singleOrNull()
+        search(name, health.attempts(policy.storefrontOrder))
+        if (policy.enabled) {
+            // Variants discover candidates, but names still have to match a known
+            // group or the controlled kana comparison; limit extra requests.
+            artistSearchTerms(name, true).drop(1).take(2).forEach { term ->
+                search(term, health.attempts(policy.storefrontOrder).take(2))
+            }
+        }
+        if (!policy.enabled) return ranked.keys.singleOrNull()
+        if (ranked.size == 1) return ranked.keys.single()
+        if (ranked.size > 1) return choosePopularCandidate(name, ranked.values.toList(), policy)
         if (!policy.enabled) return null
         val ids = candidates.map { it.id }.distinct()
         if (ids.isEmpty() || ids.size > 3) return null
-        // Batch ID lookup keeps request count bounded. Some iTunes artistName
-        // fields stay untranslated, so scoped public headers are the final check.
+        // A localized official name may only occur in lookup or the artist header.
         val names = linkedMapOf<String, MutableSet<String>>()
         for (country in health.attempts(policy.storefrontOrder)) {
             val found = lookup(ids, country, policy.storefrontOrder)
             found.forEach { (id, values) -> names.getOrPut(id) { linkedSetOf() }.addAll(values) }
-            if (names.filterValues { wanted in it }.size > 1) return null
         }
         val lookupMatches = names.filterValues { wanted in it }.keys
-        if (lookupMatches.isNotEmpty()) return lookupMatches.singleOrNull()
+        if (lookupMatches.isNotEmpty()) {
+            val eligible = candidates.filter { it.id in lookupMatches }.distinctBy { it.id }
+                .map { CandidateSignals(it) }
+            return if (eligible.size == 1) eligible.single().candidate.id else choosePopularCandidate(name, eligible, policy)
+        }
         val language = when {
             name.any { it in '\u3040'..'\u30ff' } -> "ja-JP"
             name.any { it in '\u3400'..'\u9fff' } -> "zh-Hans"
@@ -167,7 +190,56 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
                     .orEmpty().any { artistIdentityKey(it) == wanted }
             }
         }
-        return matches.singleOrNull()
+        val eligible = candidates.filter { it.id in matches }.distinctBy { it.id }.map { CandidateSignals(it) }
+        return when (eligible.size) {
+            0 -> null
+            1 -> eligible.single().candidate.id
+            else -> choosePopularCandidate(name, eligible, policy)
+        }
+    }
+
+    /** Signals are catalog evidence, not follower or play counts. */
+    private fun choosePopularCandidate(name: String, candidates: List<CandidateSignals>, policy: ArtistIdentityPolicy): String? {
+        if (candidates.isEmpty()) return null
+        val ids = candidates.map { it.candidate.id }.toSet()
+        // At most two valid storefront responses; unavailable responses are not zero popularity.
+        var successful = 0
+        for (country in health.attempts(policy.storefrontOrder)) {
+            if (successful >= 2) break
+            val url = "https://itunes.apple.com/search?term=${URLEncoder.encode(name, "UTF-8")}" +
+                "&entity=song&country=$country&limit=50"
+            val response = fetch(url)?.let { AppleMusicPageParser.songArtistSignals(it, ids) }
+            if (response == null) { health.unavailable(country, policy.storefrontOrder); continue }
+            successful++
+            candidates.forEach { candidate -> candidate.songIds += response[candidate.candidate.id].orEmpty() }
+        }
+        // Motion is a weak tie-breaker, not proof of popularity or identity.
+        // Inspect at most two plausible leaders and avoid expensive page fetches
+        // when song evidence already outweighs the maximum motion bonus.
+        val leaders = candidates.sortedWith(compareByDescending<CandidateSignals> { it.baseScore }.thenBy { it.order })
+        if (leaders.size > 1 && leaders[0].baseScore - leaders[1].baseScore <= MOTION_BONUS) {
+            leaders.take(2).forEach { signal ->
+                val url = signal.candidate.url
+                val page = fetch(url)?.let { AppleMusicPageParser.parseHtml(it, signal.candidate.id, url, 0L) }
+                signal.motion = page?.motion != null
+            }
+        }
+        val winner = candidates.maxWithOrNull(compareBy<CandidateSignals> { it.score }.thenBy { -it.order }) ?: return null
+        log.log("apple-music automatic choice candidates=${candidates.size} songs=${winner.songIds.size} motion=${winner.motion} regions=${winner.countries.size}")
+        return winner.candidate.id
+    }
+
+    private class CandidateSignals(val candidate: ArtistSearchCandidate) {
+        val countries = linkedSetOf<String>()
+        val songIds = linkedSetOf<String>()
+        var motion = false
+        var order = Int.MAX_VALUE
+        fun recordSearch(country: String, index: Int) {
+            countries += country
+            order = minOf(order, index)
+        }
+        val baseScore: Int get() = songIds.size.coerceAtMost(12) * 3 + countries.size.coerceAtMost(3) * 2
+        val score: Int get() = baseScore + if (motion) MOTION_BONUS else 0
     }
 
     /** Blocking, bounded search for a user to inspect; no automatic binding or artwork fetch. */
@@ -246,6 +318,7 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
 
     internal data class Overrides(val ids: Map<String, String>, val rejected: Set<String>)
     companion object {
+        private const val MOTION_BONUS = 6
         private const val RETRY_MS = 15L * 60 * 1000
         private const val NEGATIVE_MS = 60_000L
         private const val VERIFIED_MS = 24L * 60 * 60 * 1000

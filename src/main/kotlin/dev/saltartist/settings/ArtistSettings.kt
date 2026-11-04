@@ -4,6 +4,7 @@ import com.xuncorp.spw.workshop.api.UnstableSpwWorkshopApi
 import com.xuncorp.spw.workshop.api.config.ConfigHelper
 import androidx.compose.runtime.mutableStateOf
 import dev.saltartist.am.ArtistLanguagePolicy
+import dev.saltartist.am.ArtistVisualPolicy
 import dev.saltartist.am.ArtistIdentityPolicy
 import dev.saltartist.am.ArtistIdentityResolver
 import dev.saltartist.am.PreferredArtistLanguage
@@ -23,6 +24,8 @@ data class ArtistSettingsData(
     val artistIdentityOverrides: String = "",
     val appleMusicStorefronts: String = ArtistIdentityPolicy.DEFAULT_STOREFRONTS,
     val animatedHero: Boolean = true,
+    val visualStorefront: String = ArtistVisualPolicy.DEFAULT_STOREFRONTS,
+    val visualLanguage: PreferredArtistLanguage = PreferredArtistLanguage.ENGLISH,
     val scrollHeroBlur: Boolean = true,
     val motionFrameRate: Int = 30,
     val motionResolution: MotionResolution = MotionResolution.FULL_HD,
@@ -30,6 +33,7 @@ data class ArtistSettingsData(
 ) {
     val languagePolicy: ArtistLanguagePolicy
         get() = ArtistLanguagePolicy(preferredLanguage, showOtherLanguages)
+    val visualPolicy: ArtistVisualPolicy get() = ArtistVisualPolicy(visualStorefront, visualLanguage)
     val identityPolicy = ArtistIdentityPolicy(recognizeAliases, artistIdentityOverrides, appleMusicStorefronts)
 }
 
@@ -47,6 +51,10 @@ internal fun artistSettingsFromValues(values: Map<String, Any?>): ArtistSettings
     artistIdentityOverrides = values[ArtistSettings.KEY_IDENTITY_OVERRIDES] as? String ?: "",
     appleMusicStorefronts = values[ArtistSettings.KEY_STOREFRONTS] as? String ?: ArtistIdentityPolicy.DEFAULT_STOREFRONTS,
     animatedHero = values[ArtistSettings.KEY_ANIMATED_HERO] as? Boolean ?: true,
+    visualStorefront = values[ArtistSettings.KEY_VISUAL_STOREFRONT] as? String ?: ArtistVisualPolicy.DEFAULT_STOREFRONTS,
+    visualLanguage = PreferredArtistLanguage.entries.firstOrNull {
+        it.name == values[ArtistSettings.KEY_VISUAL_LANGUAGE] || it.code == values[ArtistSettings.KEY_VISUAL_LANGUAGE]
+    } ?: PreferredArtistLanguage.ENGLISH,
     scrollHeroBlur = values[ArtistSettings.KEY_SCROLL_BLUR] as? Boolean ?: true,
     motionFrameRate = motionFrameRate(values[ArtistSettings.KEY_MOTION_FPS]),
     motionResolution = motionResolution(values[ArtistSettings.KEY_MOTION_RESOLUTION]),
@@ -115,6 +123,8 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
             KEY_ALIASES to get(KEY_ALIASES, true), KEY_IDENTITY_OVERRIDES to get(KEY_IDENTITY_OVERRIDES, ""),
             KEY_STOREFRONTS to get(KEY_STOREFRONTS, ArtistIdentityPolicy.DEFAULT_STOREFRONTS),
             KEY_ANIMATED_HERO to get(KEY_ANIMATED_HERO, true),
+            KEY_VISUAL_STOREFRONT to get(KEY_VISUAL_STOREFRONT, ArtistVisualPolicy.DEFAULT_STOREFRONTS),
+            KEY_VISUAL_LANGUAGE to get(KEY_VISUAL_LANGUAGE, "ENGLISH"),
             KEY_SCROLL_BLUR to get(KEY_SCROLL_BLUR, true), KEY_MOTION_FPS to storedFps,
             KEY_MOTION_RESOLUTION to get(KEY_MOTION_RESOLUTION, "FULL_HD"),
             KEY_DIRECTORY_VIEW to get(KEY_DIRECTORY_VIEW, "GRID"), KEY_DIRECTORY_SIZE to get(KEY_DIRECTORY_SIZE, "MEDIUM"),
@@ -204,6 +214,8 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
         const val KEY_IDENTITY_OVERRIDES = "artist_identity_overrides"
         const val KEY_STOREFRONTS = "apple_music_storefronts"
         const val KEY_ANIMATED_HERO = "animated_artist_hero"
+        const val KEY_VISUAL_STOREFRONT = "artist_visual_storefront"
+        const val KEY_VISUAL_LANGUAGE = "artist_visual_language"
         const val KEY_SCROLL_BLUR = "scroll_artist_hero_blur"
         const val KEY_MOTION_FPS = "artist_motion_fps"
         const val KEY_MOTION_RESOLUTION = "artist_motion_resolution"

@@ -23,9 +23,9 @@
 
 ## 界面与播放接入
 
-0.2.6 的普通文本、无图片艺术字时的艺人标题和输入框只继承宿主字体族，保留插件自己的字号、字重和颜色。1.19.2 的 Salt UI `ContentStyle.kt` 将 `LocalTextStyle` 暴露为 `androidx.compose.ui.\u10C7.\u0528()`；AppTheme 按字体策略选出的 MiSans Regular 等字体由该 CompositionLocal 传递。桥接在首次组合时延迟解析，校验静态无参签名及 `CompositionLocal<TextStyle>` 类型；组合中读取当前值以跟随设置变化。缺类或契约不符时回退系统字体，不加载／分发字体文件，也不新增 Hook。图片艺术字保持原图。
+0.2.6 的普通文本和输入框只继承宿主字体族，保留插件自己的字号、字重和颜色。0.3.0 的无图片艺术字艺人标题例外：优先使用系统中已安装的 SF Pro，否则使用随插件附带、采用 SIL OFL 1.1 的 Inter Display Bold 近似 Apple Music 的标题；这只改变标题，不改宿主字体设置，东亚等字形继续由系统回退。1.19.2 的 Salt UI `ContentStyle.kt` 将 `LocalTextStyle` 暴露为 `androidx.compose.ui.\u10C7.\u0528()`；AppTheme 按字体策略选出的 MiSans Regular 等字体由该 CompositionLocal 传递。桥接在首次组合时延迟解析，校验静态无参签名及 `CompositionLocal<TextStyle>` 类型；组合中读取当前值以跟随设置变化。普通文本桥接缺类或契约不符时回退系统字体，也不新增 Hook。图片艺术字保持原图。
 
-独立 Compose／Skia 场景使用宿主实际 LocalTextStyle 与内置 MiSans，确认普通文本、列表搜索、歌曲搜索、编辑框和无艺术字标题均继承字体，运行中切换字体与系统回退也能同步；166 项既有测试及 `test plugin` 通过。本地证据在 `build/reports/font-026/`，宿主界面仍由用户验收。
+0.2.6 的独立 Compose／Skia 场景曾确认普通文本、列表搜索、歌曲搜索、编辑框和当时的无艺术字标题均继承字体，运行中切换字体与系统回退也能同步；0.3.0 已按上文将标题改为独立字体。166 项既有测试及 `test plugin` 通过。本地证据在 `build/reports/font-026/`，宿主界面仍由用户验收。
 
 主页面采用 `afterComposable` 整页覆盖，位于原生艺人内容之上、宿主迷你播放器之下。相同调用点的 `replaceComposable` 曾注册成功却从不组合插件内容；`afterComposable` 已有实际渲染证据，所以保留覆盖方案。更换方案前必须重新确认组合行为，不能仅看注册结果。
 

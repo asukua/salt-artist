@@ -234,11 +234,11 @@ internal fun ArtistHero(
                     text = name,
                     modifier = Modifier.widthIn(max = 780.dp),
                     style = TextStyle(
-                        fontFamily = hostFontFamily(),
+                        fontFamily = ArtistTitleTypography.fontFamily,
                         color = Color.White,
                         fontSize = if (compact) 46.sp else 62.sp,
                         lineHeight = if (compact) 50.sp else 66.sp,
-                        fontWeight = FontWeight.Black,
+                        fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
                         shadow = Shadow(Color.Black.copy(alpha = 0.35f), Offset(0f, 2f), 12f),
                     ),

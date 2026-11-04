@@ -12,6 +12,7 @@ import dev.saltartist.am.AmArtist
 import dev.saltartist.am.atomicCacheWrite
 import dev.saltartist.am.artistIdentityKey
 import dev.saltartist.am.ArtistLanguagePolicy
+import dev.saltartist.am.ArtistVisualPolicy
 import dev.saltartist.am.ArtistIdentityPolicy
 import dev.saltartist.am.ArtistMatchCandidate
 import dev.saltartist.data.normalizeArtistKey
@@ -116,12 +117,13 @@ class ArtworkStore(
      * 命中内存缓存时直接返回。
      */
     fun appleArt(artistName: String, policy: ArtistLanguagePolicy = ArtistLanguagePolicy(),
-                 identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false)): AmArt? {
+                 identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false),
+                 visual: ArtistVisualPolicy? = null): AmArt? {
         if (closed) return null
         val cat = catalog ?: return null
         // Each queued request captures its own immutable matching policy. A late
         // result cannot become the image selected after a preference change.
-        val key = appleArtworkCacheKey(artistName, policy, identity)
+        val key = appleArtworkCacheKey(artistName, policy, identity, visual)
         appleCache[key]?.let { hit ->
             if (!hit.retryable || System.currentTimeMillis() - (appleCompletedAt[key] ?: 0L) < EMPTY_RETRY_MS) return hit
         }
@@ -151,12 +153,12 @@ class ArtworkStore(
         fun refresh() {
             try {
                 if (!current()) return
-                val meta = cat.resolve(artistName, policy, identity = identity)
+                val meta = cat.resolve(artistName, policy, identity = identity, visual = visual)
                 if (meta == null) {
                     publish(AmArt(null, null))
                     return
                 }
-                if (current()) publish(readAppleAssets(artistName, identity, meta, network = true, ::mutateCache))
+                if (current()) publish(readAppleAssets(artistName, identity, visual, meta, network = true, ::mutateCache))
             } catch (t: Throwable) {
                 log.log("apple-music failed for \"$artistName\": ${log.describe(t)}")
                 publish(AmArt(null, null))
@@ -170,12 +172,12 @@ class ArtworkStore(
             try {
                 if (!current()) return@execute
                 val start = System.nanoTime()
-                val meta = cat.cached(artistName, policy, identity)
-                val local = meta?.let { readAppleAssets(artistName, identity, it, network = false, ::mutateCache) }
+                val meta = cat.cached(artistName, policy, identity, visual)
+                val local = meta?.let { readAppleAssets(artistName, identity, visual, it, network = false, ::mutateCache) }
                 if (local != null && current()) {
                     publish(local)
                     log.logOnce("local-art:$key", "apple-music local assets artist=\"$artistName\" ms=${(System.nanoTime() - start) / 1_000_000}")
-                    if (!local.retryable && cat.cachedIsFresh(artistName, policy, identity)) return@execute
+                    if (!local.retryable && cat.cachedIsFresh(artistName, policy, identity, visual)) return@execute
                 }
                 if (current()) { appleExecutor.execute(::refresh); remoteScheduled = true }
             } catch (error: Throwable) {
@@ -186,15 +188,15 @@ class ArtworkStore(
         return appleCache[key]
     }
 
-    private fun readAppleAssets(name: String, identity: ArtistIdentityPolicy, meta: AmArtist, network: Boolean,
+    private fun readAppleAssets(name: String, identity: ArtistIdentityPolicy, visual: ArtistVisualPolicy?, meta: AmArtist, network: Boolean,
                                mutateCache: (() -> Unit) -> Unit): AmArt {
         val cat = checkNotNull(catalog)
         fun bytes(file: File?, url: String): ByteArray? = if (network) loadImage(file, url, mutateCache) else file
             ?.takeIf { it.isFile && it.length() in 1..MAX_IMAGE_BYTES.toLong() }
             ?.let { runCatching { readLocalImage(it) }.getOrNull() }
         val hero = meta.heroTemplate?.let { template ->
-            bytes(cat.heroFile(name, identity), cat.imageUrl(template, meta.heroCrop, 1600, if (meta.heroIsWide) 800 else 1600))
-        }?.let { runCatching { decode(it) }.onFailure { mutateCache { cat.heroFile(name, identity)?.delete() } }.getOrNull() }
+            bytes(cat.heroFile(name, identity, visual), cat.imageUrl(template, meta.heroCrop, 1600, if (meta.heroIsWide) 800 else 1600))
+        }?.let { runCatching { decode(it) }.onFailure { mutateCache { cat.heroFile(name, identity, visual)?.delete() } }.getOrNull() }
         val logo = meta.logoTemplate?.let { template ->
             bytes(cat.logoFile(name, identity), cat.imageUrl(template, meta.logoCrop, 1000, 320, "png"))
         }?.let { runCatching { downscale(checkedImage(it), 1000).toComposeImageBitmap() }
@@ -204,7 +206,8 @@ class ArtworkStore(
         }?.let { runCatching { downscale(checkedImage(it), 900).toComposeImageBitmap() }
             .onFailure { mutateCache { cat.avatarFile(name, identity)?.delete() } }.getOrNull() }
         return AmArt(hero, logo, avatar, meta.details, meta.motion,
-            incompleteImages = (meta.heroTemplate != null && hero == null) ||
+            incompleteImages = (visual != null && !cat.isVisualFresh(name, identity, visual)) ||
+                (meta.heroTemplate != null && hero == null) ||
                 (meta.logoTemplate != null && logo == null) || (meta.avatarTemplate != null && avatar == null))
     }
 
@@ -310,7 +313,8 @@ class ArtworkStore(
 
     /** 艺人写真：自定义写真 > Apple Music 头图 > 曲库封面。 */
     fun artworkFor(artistName: String, coverTrackId: String?, policy: ArtistLanguagePolicy = ArtistLanguagePolicy(),
-                   identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false)): Artwork? {
+                   identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false),
+                   visual: ArtistVisualPolicy? = null): Artwork? {
         val key = normalizeArtistKey(artistName)
         customPhotoCache[key]?.let { return it }
 
@@ -326,7 +330,7 @@ class ArtworkStore(
         if (photo != null) customPhotoCache[key]?.let { return it }
 
         // Apple Music 头图单独缓存，绝不被曲库封面占用艺人缓存槽位。
-        appleArt(artistName, policy, identity)?.hero?.let { return it }
+        appleArt(artistName, policy, identity, visual)?.hero?.let { return it }
 
         val trackId = coverTrackId?.takeIf(String::isNotBlank) ?: return null
         return heroCover(trackId)

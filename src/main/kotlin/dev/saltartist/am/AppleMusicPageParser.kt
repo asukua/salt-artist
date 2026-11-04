@@ -142,6 +142,21 @@ internal object AppleMusicPageParser {
             }
     }.getOrNull()
 
+    /** Count distinct returned songs by verified candidate ID; not a play-count metric. */
+    internal fun songArtistSignals(json: String, candidateIds: Set<String>): Map<String, Set<String>>? = runCatching {
+        if (json.length > MAX_PAGE_CHARS) return null
+        val results = AppleMusicJson.read(json).jsonObject()?.get("results") as? List<*> ?: return null
+        val songs = linkedMapOf<String, MutableSet<String>>()
+        results.take(50).forEach { item ->
+            val row = item.jsonObject() ?: return@forEach
+            if (row.textAt("wrapperType") != "track" || row.textAt("kind") != "song") return@forEach
+            val id = row["artistId"]?.toString()?.takeIf { it in candidateIds } ?: return@forEach
+            val trackId = row["trackId"]?.toString()?.takeIf { it.matches(Regex("[1-9][0-9]{0,19}")) } ?: return@forEach
+            songs.getOrPut(id) { linkedSetOf() }.add(trackId)
+        }
+        songs
+    }.getOrNull()
+
     internal fun lookupArtistNames(json: String, expectedIds: Set<String>): Map<String, Set<String>> = runCatching {
         artistSearchCandidates(json).filter { it.id in expectedIds }
             .groupBy { it.id }.mapValues { (_, items) -> items.map { artistIdentityKey(it.name) }.toSet() }

@@ -66,7 +66,7 @@ class ArtistScopedCacheTest {
         }
     }
 
-    @Test fun exactAutomaticLegacyPolicyStillMigratesButUnrelatedHistoricalOverridesAreNotGuessed() {
+    @Test fun automaticLegacyResultsAreReevaluatedWhileUnrelatedBindingsStayIsolated() {
         val dir = Files.createTempDirectory("salt-auto-cache").toFile()
         try {
             val automatic = ArtistIdentityPolicy()
@@ -75,11 +75,27 @@ class ArtistScopedCacheTest {
                 AppleMusicCache.encode("${automatic.legacyArtistCacheKey("Automatic")}|zh-Hans", record()) + "\n" +
                     AppleMusicCache.encode("${historical.legacyArtistCacheKey("Historical")}|zh-Hans", record()) + "\n")
             val catalog = AppleMusicCatalog(dir, log)
-            assertEquals("42", catalog.cached("Automatic", identity = automatic)?.artistId)
-            assertEquals("42", catalog.cached("Automatic", identity = automatic.copy(overrides = "Other=99"))?.artistId)
+            assertNull(catalog.cached("Automatic", identity = automatic))
+            assertNull(catalog.cached("Automatic", identity = automatic.copy(overrides = "Other=99")))
             assertNull(catalog.cached("Historical", identity = automatic))
-            // Once the confirmed automatic record is migrated, future unrelated edits keep its stable key.
+            // Unrelated binding edits still leave an automatic artist's new key unchanged.
             assertEquals(automatic.artistCacheKey("Automatic"), automatic.copy(overrides = "Other=99").artistCacheKey("Automatic"))
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun v3AutomaticCacheIsNotReusedButExistingV3ManualCacheRemainsAvailable() {
+        val dir = Files.createTempDirectory("salt-v4-cache").toFile()
+        try {
+            val auto = ArtistIdentityPolicy()
+            val manual = auto.copy(overrides = "Manual=42")
+            val oldAuto = auto.artistCacheKey("Automatic").replace("aliases-v4-", "aliases-v3-")
+            val manualKey = manual.artistCacheKey("Manual")
+            dir.resolve("apple-music-cache.tsv").writeText(
+                AppleMusicCache.encode("$oldAuto|zh-Hans", record("99")) + "\n" +
+                    AppleMusicCache.encode("$manualKey|zh-Hans", record("42")) + "\n")
+            val catalog = AppleMusicCatalog(dir, log)
+            assertNull(catalog.cached("Automatic", identity = auto))
+            assertEquals("42", catalog.cached("Manual", identity = manual)?.artistId)
         } finally { dir.deleteRecursively() }
     }
 

@@ -5,6 +5,7 @@ Salt Artist source code is licensed under [Apache-2.0](LICENSE).
 | Component | Source | License / distribution |
 | --- | --- | --- |
 | SPW Workshop API and Gradle plugin | [Moriafly/spw-workshop-api](https://github.com/Moriafly/spw-workshop-api) | Apache-2.0; API supplied by Salt Player at runtime |
+| Inter Display Bold 4.1 | [rsms/inter](https://github.com/rsms/inter/releases/tag/v4.1) | SIL Open Font License 1.1; font and full license included in `classes/fonts/` |
 | Gradle Wrapper | [Gradle](https://github.com/gradle/gradle) | Apache-2.0; included in the source repository |
 | Kotlin | [JetBrains/kotlin](https://github.com/JetBrains/kotlin) | Apache-2.0; supplied by the host at runtime |
 | Compose Multiplatform | [JetBrains/compose-multiplatform](https://github.com/JetBrains/compose-multiplatform) | Apache-2.0; supplied by the host at runtime |
