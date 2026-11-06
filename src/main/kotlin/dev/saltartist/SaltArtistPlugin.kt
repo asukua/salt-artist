@@ -318,7 +318,7 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
                 runtime.cancelArtistDownloads()
                 runtime.artwork.clearAppleMusicCache().whenComplete { files, error ->
                     runCatching { WorkshopApi.ui.toast(
-                        if (error == null) "已清除 Apple Music 缓存（$files 个文件）" else "缓存清除失败，请稍后重试",
+                          if (error == null) "已清除图片与资料缓存（$files 个文件）" else "缓存清除失败，请稍后重试",
                         if (error == null) WorkshopApi.Ui.ToastType.Success else WorkshopApi.Ui.ToastType.Warning,
                     ) }
                 }

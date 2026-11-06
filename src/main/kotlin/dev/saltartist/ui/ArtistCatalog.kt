@@ -9,7 +9,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,15 +20,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,18 +44,49 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import dev.saltartist.artwork.ArtworkPalette
+import dev.saltartist.artwork.Artwork
 import dev.saltartist.data.ArtistAlbum
 import dev.saltartist.data.ArtistPageModel
 import dev.saltartist.data.ArtistTrack
 import dev.saltartist.data.formatDuration
 import dev.saltartist.data.selectLatestAddedAlbum
 
-/** 紧凑的发行与曲库区域，专辑入口打开详情，播放操作复用页面提供的宿主队列入口。 */
+internal data class ArtistCatalogPlan(
+    val albums: List<ArtistAlbum>, val latest: ArtistAlbum?, val tracks: List<ArtistTrack>,
+    val totalCount: Int, val query: String, val expanded: Boolean,
+    val sidePadding: Dp, val sideBySide: Boolean, val albumColumns: Int,
+    val songs: CatalogSongLayout, val showDuration: Boolean,
+)
+
 @Composable
-internal fun ArtistCatalog(
-    model: ArtistPageModel,
+internal fun rememberArtistCatalog(model: ArtistPageModel, width: Dp, searchActive: Boolean,
+                                   searchQuery: String, expanded: Boolean): ArtistCatalogPlan {
+    val albums = remember(model.albums) {
+        model.albums.sortedWith(compareByDescending<ArtistAlbum> { it.year }.thenBy { it.title }.thenBy { it.artist })
+    }
+    val latest = remember(model.albums) { selectLatestAddedAlbum(model.albums) }
+    val query = if (searchActive) searchQuery.trim() else ""
+    val tracks = remember(model.tracks, query) {
+        if (query.isBlank()) model.tracks else model.tracks.filter {
+            it.title.contains(query, ignoreCase = true) || it.album.contains(query, ignoreCase = true)
+        }
+    }
+    val padding = if (width < 560.dp) 20.dp else 32.dp
+    val innerWidth = (width - padding * 2).coerceAtMost(1280.dp)
+    val sideBySide = innerWidth >= 800.dp && albums.isNotEmpty()
+    val songWidth = innerWidth - if (sideBySide) 300.dp else 0.dp
+    val columns = when { songWidth >= 720.dp -> 3; songWidth >= 470.dp -> 2; else -> 1 }
+    val albumColumns = when { innerWidth >= 1100.dp -> 6; innerWidth >= 860.dp -> 5; innerWidth >= 620.dp -> 4; else -> 2 }
+    return ArtistCatalogPlan(albums, latest, tracks, model.trackCount, query, expanded, padding, sideBySide,
+        albumColumns, CatalogSongLayout(tracks.size, columns, expanded || query.isNotBlank()), songWidth / columns >= 270.dp)
+}
+
+/** Only the fixed-size overview and visible song/album rows are composed. */
+internal fun LazyListScope.artistCatalog(
+    plan: ArtistCatalogPlan,
     deps: ArtistScreenDeps,
     palette: ArtworkPalette,
     currentTrackId: String,
@@ -68,113 +97,90 @@ internal fun ArtistCatalog(
     onOpenAlbum: (ArtistAlbum) -> Unit,
     onPlayAlbum: (ArtistAlbum) -> Unit,
     onShuffle: () -> Unit,
+    onExpand: () -> Unit,
 ) {
-    val albums = remember(model.albums) {
-        model.albums.sortedWith(
-            compareByDescending<ArtistAlbum> { it.year }.thenBy { it.title }.thenBy { it.artist },
-        )
-    }
-    val latestAddedAlbum = remember(model.albums) { selectLatestAddedAlbum(model.albums) }
-    val query = if (searchActive) searchQuery.trim() else ""
-    val tracks = remember(model.tracks, query) {
-        if (query.isBlank()) model.tracks else model.tracks.filter {
-            it.title.contains(query, ignoreCase = true) || it.album.contains(query, ignoreCase = true)
+    item(key = "catalogue", contentType = "overview") {
+        CatalogContainer(plan) {
+            Column(Modifier.fillMaxWidth()) {
+                @Composable fun songs(modifier: Modifier) = CatalogSongs(
+                    plan, deps, palette, currentTrackId, searchActive, searchQuery,
+                    onExpand, onSearchQueryChange, onPlayTrack, onShuffle, modifier,
+                )
+                if (plan.sideBySide) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                        val album = checkNotNull(plan.latest)
+                        LatestAdded(album, deps, palette, { onOpenAlbum(album) }, { onPlayAlbum(album) }, Modifier.width(272.dp))
+                        songs(Modifier.weight(1f))
+                    }
+                } else {
+                    plan.latest?.let { album ->
+                        LatestAdded(album, deps, palette, { onOpenAlbum(album) }, { onPlayAlbum(album) }, Modifier.widthIn(max = 380.dp).fillMaxWidth())
+                        Spacer(Modifier.height(22.dp))
+                    }
+                    songs(Modifier.fillMaxWidth())
+                }
+            }
         }
     }
-    var expanded by remember(model.name) { mutableStateOf(false) }
-
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val sidePadding = if (maxWidth < 560.dp) 20.dp else 32.dp
-        Box(
-            Modifier.fillMaxWidth().padding(horizontal = sidePadding).padding(bottom = 24.dp),
-            contentAlignment = Alignment.TopCenter,
-        ) {
-            BoxWithConstraints(Modifier.widthIn(max = 1280.dp).fillMaxWidth()) {
-                val overviewSideBySide = maxWidth >= 800.dp && albums.isNotEmpty()
-                val albumColumns = when {
-                    maxWidth >= 1100.dp -> 6
-                    maxWidth >= 860.dp -> 5
-                    maxWidth >= 620.dp -> 4
-                    else -> 2
+    items(plan.songs.remainingRows, key = { offset ->
+        val row = offset + plan.songs.overviewRows
+        "song:$row:${plan.songs.columns}:${plan.tracks[plan.songs.index(row, 0)!!].id}"
+    }, contentType = { "song-row" }) { offset ->
+        CatalogContainer(plan) {
+            Row(Modifier.fillMaxWidth()) {
+                if (plan.sideBySide) Spacer(Modifier.width(300.dp))
+                CatalogSongRow(plan, offset + plan.songs.overviewRows, deps, palette, currentTrackId, onPlayTrack, Modifier.weight(1f))
+            }
+        }
+    }
+    if (plan.albums.isNotEmpty()) {
+        item(key = "album-heading", contentType = "heading") {
+            CatalogContainer(plan) {
+                Column {
+                    Spacer(Modifier.height(26.dp))
+                    CatalogSectionTitle("专辑", "${plan.albums.size} 张", palette)
+                    Spacer(Modifier.height(10.dp))
                 }
-                Column(Modifier.fillMaxWidth()) {
-                    if (overviewSideBySide) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                            LatestAdded(
-                                album = latestAddedAlbum ?: albums.first(),
-                                deps = deps,
-                                palette = palette,
-                                onOpen = { onOpenAlbum(latestAddedAlbum ?: albums.first()) },
-                                onPlay = { onPlayAlbum(latestAddedAlbum ?: albums.first()) },
-                                modifier = Modifier.width(272.dp),
-                            )
-                            CatalogSongs(
-                                tracks = tracks,
-                                totalCount = model.trackCount,
-                                deps = deps,
-                                palette = palette,
-                                currentTrackId = currentTrackId,
-                                searchActive = searchActive,
-                                searchQuery = searchQuery,
-                                query = query,
-                                expanded = expanded,
-                                onExpand = { expanded = !expanded },
-                                onSearchQueryChange = onSearchQueryChange,
-                                onPlayTrack = onPlayTrack,
-                                onShuffle = onShuffle,
-                                modifier = Modifier.weight(1f),
-                            )
+            }
+        }
+        items((plan.albums.size + plan.albumColumns - 1) / plan.albumColumns,
+            key = { "album-row:$it:${plan.albumColumns}" }, contentType = { "album-row" }) { row ->
+            CatalogContainer(plan) {
+                Column {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                        repeat(plan.albumColumns) { column ->
+                            val album = plan.albums.getOrNull(row * plan.albumColumns + column)
+                            if (album == null) Spacer(Modifier.weight(1f))
+                            else CatalogAlbum(album, deps, palette, { onOpenAlbum(album) }, { onPlayAlbum(album) }, Modifier.weight(1f))
                         }
-                    } else {
-                        if (albums.isNotEmpty()) {
-                            LatestAdded(
-                                album = latestAddedAlbum ?: albums.first(),
-                                deps = deps,
-                                palette = palette,
-                                onOpen = { onOpenAlbum(latestAddedAlbum ?: albums.first()) },
-                                onPlay = { onPlayAlbum(latestAddedAlbum ?: albums.first()) },
-                                modifier = Modifier.widthIn(max = 380.dp).fillMaxWidth(),
-                            )
-                            Spacer(Modifier.height(22.dp))
-                        }
-                        CatalogSongs(
-                            tracks = tracks,
-                            totalCount = model.trackCount,
-                            deps = deps,
-                            palette = palette,
-                            currentTrackId = currentTrackId,
-                            searchActive = searchActive,
-                            searchQuery = searchQuery,
-                            query = query,
-                            expanded = expanded,
-                            onExpand = { expanded = !expanded },
-                            onSearchQueryChange = onSearchQueryChange,
-                            onPlayTrack = onPlayTrack,
-                            onShuffle = onShuffle,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
                     }
+                    Spacer(Modifier.height(20.dp))
+                }
+            }
+        }
+    }
+    item(key = "catalogue-bottom", contentType = "spacing") { Spacer(Modifier.height(24.dp)) }
+}
 
-                    if (albums.isNotEmpty()) {
-                        Spacer(Modifier.height(26.dp))
-                        CatalogSectionTitle("专辑", "${albums.size} 张", palette)
-                        Spacer(Modifier.height(10.dp))
-                        albums.chunked(albumColumns).forEach { rowAlbums ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                                rowAlbums.forEach { album ->
-                                    CatalogAlbum(
-                                        album = album,
-                                        deps = deps,
-                                        palette = palette,
-                                        onOpen = { onOpenAlbum(album) },
-                                        onPlay = { onPlayAlbum(album) },
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                                repeat(albumColumns - rowAlbums.size) { Spacer(Modifier.weight(1f)) }
-                            }
-                            Spacer(Modifier.height(20.dp))
-                        }
+@Composable
+private fun CatalogContainer(plan: ArtistCatalogPlan, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = plan.sidePadding), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.widthIn(max = 1280.dp).fillMaxWidth()) { content() }
+    }
+}
+
+@Composable
+private fun CatalogSongRow(plan: ArtistCatalogPlan, row: Int, deps: ArtistScreenDeps, palette: ArtworkPalette,
+                           currentTrackId: String, onPlay: (ArtistTrack) -> Unit, modifier: Modifier) {
+    val compactWidth = (320 * plan.songs.columns + 18 * (plan.songs.columns - 1).coerceAtLeast(0)).dp
+    Box(modifier) {
+        Row(Modifier.widthIn(max = compactWidth).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            repeat(plan.songs.columns) { column ->
+                Box(Modifier.weight(1f)) {
+                    plan.songs.index(row, column)?.let { index ->
+                        val track = plan.tracks[index]
+                        CatalogTrack(track, deps, palette, currentTrackId.isNotBlank() && track.id == currentTrackId,
+                            plan.songs.divider(row, column), plan.showDuration) { onPlay(track) }
                     }
                 }
             }
@@ -231,37 +237,26 @@ private fun LatestAdded(
 
 @Composable
 private fun CatalogSongs(
-    tracks: List<ArtistTrack>,
-    totalCount: Int,
+    plan: ArtistCatalogPlan,
     deps: ArtistScreenDeps,
     palette: ArtworkPalette,
     currentTrackId: String,
     searchActive: Boolean,
     searchQuery: String,
-    query: String,
-    expanded: Boolean,
     onExpand: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onPlayTrack: (ArtistTrack) -> Unit,
     onShuffle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    BoxWithConstraints(modifier) {
-        val availableWidth = maxWidth
-        val maxColumns = when {
-            availableWidth >= 720.dp -> 3
-            availableWidth >= 470.dp -> 2
-            else -> 1
-        }
-        val showDuration = availableWidth / maxColumns >= 270.dp
-        val previewCount = maxColumns * 3
+    Box(modifier) {
+        val tracks = plan.tracks
+        val totalCount = plan.totalCount
+        val query = plan.query
+        val layout = plan.songs
+        val previewCount = layout.maxColumns * 3
         val showAllMatches = query.isNotBlank()
-        val shown = if (expanded || showAllMatches) tracks else tracks.take(previewCount)
-        val rowsPerColumn = if (expanded || showAllMatches) {
-            ((shown.size + maxColumns - 1) / maxColumns).coerceAtLeast(1)
-        } else 3
-        val columns = shown.chunked(rowsPerColumn)
-        val compactWidth = (320 * columns.size + 18 * (columns.size - 1).coerceAtLeast(0)).dp
+        val compactWidth = (320 * layout.columns + 18 * (layout.columns - 1).coerceAtLeast(0)).dp
         val countText = if (query.isNotBlank()) "${tracks.size}/$totalCount 首" else "$totalCount 首"
         Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().height(24.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -273,7 +268,7 @@ private fun CatalogSongs(
                 Spacer(Modifier.weight(1f))
                 if (tracks.size > previewCount && !showAllMatches) {
                     SaltText(
-                        if (expanded) "收起" else "显示全部",
+                        if (plan.expanded) "收起" else "显示全部",
                         size = 11.sp,
                         color = palette.onBackdrop.copy(alpha = 0.75f),
                         modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
@@ -298,18 +293,21 @@ private fun CatalogSongs(
                     Modifier.widthIn(max = compactWidth).fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(18.dp),
                 ) {
-                    columns.forEach { columnTracks ->
+                    repeat(layout.columns) { column ->
                         Column(Modifier.weight(1f)) {
-                            columnTracks.forEachIndexed { index, track ->
-                                CatalogTrack(
-                                    track = track,
-                                    deps = deps,
-                                    palette = palette,
-                                    current = currentTrackId.isNotBlank() && track.id == currentTrackId,
-                                    divider = index < columnTracks.lastIndex,
-                                    showDuration = showDuration,
-                                    onPlay = { onPlayTrack(track) },
-                                )
+                            repeat(layout.overviewRows) { row ->
+                                layout.index(row, column)?.let { index ->
+                                    val track = tracks[index]
+                                    CatalogTrack(
+                                        track = track,
+                                        deps = deps,
+                                        palette = palette,
+                                        current = currentTrackId.isNotBlank() && track.id == currentTrackId,
+                                        divider = layout.divider(row, column),
+                                        showDuration = plan.showDuration,
+                                        onPlay = { onPlayTrack(track) },
+                                    )
+                                }
                             }
                         }
                     }
@@ -350,7 +348,7 @@ internal fun CatalogTrack(
                 Modifier.size(34.dp).then(
                     if (current) Modifier.border(1.dp, palette.accent.copy(alpha = 0.85f), RoundedCornerShape(3.dp)) else Modifier,
                 ),
-                radius = 3,
+                radius = 3, maxSide = 96,
             )
             Spacer(Modifier.width(9.dp))
             Column(Modifier.weight(1f)) {
@@ -430,8 +428,9 @@ internal fun CatalogCover(
     palette: ArtworkPalette,
     modifier: Modifier,
     radius: Int,
+    maxSide: Int = 640,
 ) {
-    val cover = if (trackId.isBlank()) null else deps.artwork.cover(trackId)
+    val cover = rememberLibraryCover(trackId, deps, maxSide)
     Box(
         modifier.clip(RoundedCornerShape(radius.dp)).background(Color.White.copy(alpha = 0.045f)),
         contentAlignment = Alignment.Center,
@@ -442,6 +441,24 @@ internal fun CatalogCover(
             PlayGlyph(palette.onBackdrop.copy(alpha = 0.20f), 14.dp)
         }
     }
+}
+
+@Composable
+internal fun rememberLibraryCover(trackId: String, deps: ArtistScreenDeps, maxSide: Int = 320, hero: Boolean = false): Artwork? {
+    if (trackId.isBlank()) return null
+    val request = remember(deps.artwork, trackId, maxSide, hero, deps.artwork.coverGeneration) {
+        deps.artwork.acquireCover(trackId, maxSide, hero)
+    }
+    return request.state.value
+}
+
+@Composable
+internal fun rememberDirectoryCover(path: String?, deps: ArtistScreenDeps): Artwork? {
+    val file = deps.artwork.directoryCoverFile(path) ?: return null
+    val request = remember(deps.artwork, file, file.lastModified(), file.length(), deps.artwork.coverGeneration) {
+        deps.artwork.acquireDirectoryCover(file)
+    }
+    return request.state.value
 }
 
 @Composable

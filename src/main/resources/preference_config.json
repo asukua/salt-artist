@@ -195,7 +195,7 @@
         {
           "type": "button",
           "title": "清除缓存",
-          "summary": "取消批量任务并清除简介、图片和动态视频缓存；下次打开艺人页会重新下载",
+          "summary": "取消批量任务并清除简介、艺人图片、歌曲封面缩略图和动态视频缓存",
           "arrow_type": "none",
           "on_click": "dev.saltartist.SaltArtistPlugin.clearAppleMusicCache"
         }

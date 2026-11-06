@@ -21,6 +21,8 @@
 - 总列表背景可选「跟随椒盐设置」和「自定义」，自定义支持纯色或图片；移除、恢复、菜单和下载面板同步适配外观。
 - 保留原有 1080p / 2K / 4K、24 / 30 帧、滚动模糊和动态视频缓存；合并重复的地区与语言入口，相关设置按用途分组。视频缓存不再按 8 个或 512 MiB 总容量淘汰，已有同分辨率视频会复用，可通过「清除缓存」删除。
 
+0.3.2 修复大量歌曲的加载问题：歌曲与专辑按可见行加载，保持原有多列布局；取消静态曲库封面的缓存项数和累计请求次数限制，缩略图落盘后保留到手动清除。可见封面由页面持有，离开画面后允许回收解码位图；只控制同时获取、解码的任务数，避免展开大量歌曲时堆积原始图片。
+
 ## 预览
 
 [![bbno$ 动态头图](docs/previews/motion-bbnos.gif)](https://github.com/asukua/salt-artist/releases/download/v0.2.4/preview-bbnos.mp4)
@@ -71,7 +73,7 @@
 
 ## 开发
 
-使用 **JDK 25**，运行 `./gradlew test testHostRuntime plugin`（Windows：`.\gradlew.bat test testHostRuntime plugin`）。`testHostRuntime` 使用椒盐裁剪运行时的模块范围验证，避免依赖开发 JDK 才有的提供者。产物为 `build/libs/plugin-dev.saltartist-0.3.1.spmod`，首次构建需要联网获取依赖。接入与运行约束见[兼容说明](docs/host-compatibility.md)，实现与设计见[设计文档](docs/artist-design.md)。
+使用 **JDK 25**，运行 `./gradlew test testHostRuntime plugin`（Windows：`.\gradlew.bat test testHostRuntime plugin`）。`testHostRuntime` 使用椒盐裁剪运行时的模块范围验证，避免依赖开发 JDK 才有的提供者。产物为 `build/libs/plugin-dev.saltartist-0.3.2.spmod`，首次构建需要联网获取依赖。Windows 可另运行 `.\gradlew.bat -I scripts/verify-artwork.init.gradle verifyArtworkRuntime`，验证真实图片解码、离线恢复、大曲库离屏滚动及与 0.3.1 的布局像素对比。接入与运行约束见[兼容说明](docs/host-compatibility.md)，实现与设计见[设计文档](docs/artist-design.md)。
 
 ## 致谢
 

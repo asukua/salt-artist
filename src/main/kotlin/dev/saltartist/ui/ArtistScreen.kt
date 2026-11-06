@@ -78,7 +78,7 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
         deps.artwork.artworkFor(artistName, rawModel.heroTrackId, settings.languagePolicy, settings.identityPolicy, settings.visualPolicy)
     }
     val amArt = deps.artwork.appleArt(artistName, settings.languagePolicy, settings.identityPolicy, settings.visualPolicy)
-    val artwork = resolvedArtwork ?: amArt?.hero ?: deps.artwork.heroCover(rawModel.heroTrackId)
+    val artwork = resolvedArtwork ?: amArt?.hero ?: rememberLibraryCover(rawModel.heroTrackId, deps, 640, hero = true)
     val palette = artwork?.palette ?: ArtworkPalette.Fallback
     val motion = amArt?.motion?.takeIf {
         nativeMotionEnabled() && settings.animatedHero && customPhoto == null && artwork != null && artwork === amArt.hero
@@ -92,6 +92,7 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
     val isFavorite = deps.settings.isFavorite(artistName)
     var searchActive by remember(artistName) { mutableStateOf(false) }
     var searchQuery by remember(artistName) { mutableStateOf("") }
+    var catalogExpanded by remember(artistName) { mutableStateOf(false) }
     var editorOpen by remember(artistName) { mutableStateOf(false) }
     var infoOpen by remember(artistName) { mutableStateOf(false) }
     var logoEditorOpen by remember(artistName) { mutableStateOf(false) }
@@ -187,6 +188,7 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(palette.backdropDeep)) {
+        val catalog = rememberArtistCatalog(model, maxWidth, searchActive, searchQuery, catalogExpanded)
         val heroHeight = if (settings.immersiveHero) (maxHeight * 0.72f).coerceIn(410.dp, 570.dp)
             else (maxHeight * 0.62f).coerceIn(370.dp, 430.dp)
         val heroPx = with(LocalDensity.current) { heroHeight.toPx() }
@@ -229,24 +231,23 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
                     },
                 )
             }
-            item(key = "catalogue") {
-                ArtistCatalog(
-                    model = model,
-                    deps = deps,
-                    palette = palette,
-                    currentTrackId = currentTrackId,
-                    searchActive = searchActive,
-                    searchQuery = searchQuery,
-                    onSearchQueryChange = { searchQuery = it },
-                    onPlayTrack = { track: ArtistTrack ->
-                        val index = model.tracks.indexOfFirst { it.id == track.id }
-                        playAt(index.coerceAtLeast(0))
-                    },
-                    onOpenAlbum = { openAlbum(it) },
-                    onPlayAlbum = ::playAlbum,
-                    onShuffle = ::shuffle,
-                )
-            }
+            artistCatalog(
+                plan = catalog,
+                deps = deps,
+                palette = palette,
+                currentTrackId = currentTrackId,
+                searchActive = searchActive,
+                searchQuery = searchQuery,
+                onSearchQueryChange = { searchQuery = it },
+                onPlayTrack = { track: ArtistTrack ->
+                    val index = model.tracks.indexOfFirst { it.id == track.id }
+                    playAt(index.coerceAtLeast(0))
+                },
+                onOpenAlbum = { openAlbum(it) },
+                onPlayAlbum = ::playAlbum,
+                onShuffle = ::shuffle,
+                onExpand = { catalogExpanded = !catalogExpanded },
+            )
         }
         ArtistToolbar(
             title = model.name,

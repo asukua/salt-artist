@@ -23,18 +23,19 @@ import org.jetbrains.skia.Image
 import org.jetbrains.skia.ImageFilter
 import org.jetbrains.skia.Paint
 import org.jetbrains.skia.Rect
-import org.jetbrains.skia.SamplingMode
 import org.jetbrains.skia.Surface
 import java.io.File
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.net.URI
-import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.CompletionStage
+import java.security.MessageDigest
+import org.jetbrains.skia.EncodedImageFormat
 import javax.imageio.ImageIO
 
 /**
@@ -43,7 +44,7 @@ import javax.imageio.ImageIO
  *  2. 曲库内嵌封面（Workshop Library.getCoverById），取该艺人第一首可读歌曲；
  *  3. 回退到 [ArtworkPalette.Fallback] 的纯色渐变，页面仍保持布局稳定。
  *
- * 所有解码都在单线程池里做，避免大封面在 Compose 帧内解码造成卡顿。
+ * 图片在后台解码；曲库封面按可见组件的请求生命周期最多同时处理两项。
  * 状态用 SnapshotStateMap 暴露，加载完成即触发重组。
  */
 class ArtworkStore(
@@ -63,10 +64,11 @@ class ArtworkStore(
     }
     @Volatile private var closed = false
     private val inFlight = ConcurrentHashMap<String, Boolean>()
-    private val requested = AtomicInteger()
-
-    private val coverCache = BoundedArtworkCache<String, Artwork>(128)
-    private val heroCoverCache = BoundedArtworkCache<String, Artwork>(4)
+    internal data class CoverKey(val source: String, val side: Int, val file: File? = null, val hero: Boolean = false)
+    private val coverDirectory = pluginDir?.resolve("library-covers")
+    private val covers = DemandArtworkCache<CoverKey, Artwork>(load = ::loadCover)
+    internal val coverGeneration: Long get() = covers.generation
+    internal var libraryCoverSource: (String) -> CompletionStage<ByteArray?> = { WorkshopApi.library.getCoverById(it) }
     private val customPhotoCache = BoundedArtworkCache<String, Artwork>(4)
     private val localPhotoCache = BoundedArtworkCache<String, Artwork>(4)
     private val localLogoCache = BoundedArtworkCache<String, ImageBitmap?>(8)
@@ -245,6 +247,7 @@ class ArtworkStore(
 
     fun clearAppleMusicCache(): CompletableFuture<Int> {
         batchDownloads.cancel()
+        val deletedCovers = clearLibraryCovers()
         motionCache.clear()
         appleRequests.clear { appleCache.clear(); appleCompletedAt.clear() }
         directoryAvatars.clear()
@@ -252,7 +255,7 @@ class ArtworkStore(
             val deleted = catalog?.clear() ?: 0
             appleRequests.clear { appleCache.clear(); appleCompletedAt.clear() }
             directoryAvatars.clear()
-            deleted
+            deleted + deletedCovers
         }
     }
 
@@ -379,7 +382,7 @@ class ArtworkStore(
         return localPhotoCache[key]
     }
 
-    /** 艺人写真：自定义写真 > Apple Music 头图 > 曲库封面。 */
+    /** 艺人写真：自定义写真 > Apple Music 头图；页面作用域负责曲库封面回退。 */
     fun artworkFor(artistName: String, coverTrackId: String?, policy: ArtistLanguagePolicy = ArtistLanguagePolicy(),
                    identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false),
                    visual: ArtistVisualPolicy? = null): Artwork? {
@@ -400,60 +403,56 @@ class ArtworkStore(
         // Apple Music 头图单独缓存，绝不被曲库封面占用艺人缓存槽位。
         appleArt(artistName, policy, identity, visual)?.hero?.let { return it }
 
-        val trackId = coverTrackId?.takeIf(String::isNotBlank) ?: return null
-        return heroCover(trackId)
+        return null
     }
 
-    /** Bake blur only for currently visited hero fallbacks, never for the entire cover grid. */
-    fun heroCover(trackId: String): Artwork? {
-        if (trackId.isBlank()) return null
-        heroCoverCache[trackId]?.let { return it }
-        val key = "hero-cover:$trackId"
-        if (inFlight.putIfAbsent(key, true) == null) runCatching {
-            WorkshopApi.library.getCoverById(trackId).whenComplete { bytes, error ->
-                if (error != null || bytes == null || bytes.isEmpty()) inFlight.remove(key)
-                else runCatching { executor.execute {
-                    try { runCatching { decode(bytes, maxSide = 640, blur = true) }.getOrNull()?.let { heroCoverCache[trackId] = it } }
-                    finally { inFlight.remove(key) }
-                } }.onFailure { inFlight.remove(key) }
-            }
-        }.onFailure { inFlight.remove(key) }
-        return cover(trackId)
-    }
+    /** Library covers, including hero fallbacks, share demand-driven request ownership. */
+    internal fun acquireCover(trackId: String, maxSide: Int, hero: Boolean = false) =
+        covers.acquire(CoverKey(trackId, maxSide, hero = hero))
 
-    /** 专辑封面。 */
-    fun cover(trackId: String, artistKey: String = ""): Artwork? {
-        coverCache[trackId]?.let { return it }
-        if (requested.get() > MAX_REQUESTS) return null
-        if (inFlight.putIfAbsent("cover:$trackId", true) != null) return null
-        requested.incrementAndGet()
+    internal fun acquireDirectoryCover(file: File) = covers.acquire(
+        CoverKey("${file.absolutePath}|${file.lastModified()}|${file.length()}", 320, file),
+    )
 
-        runCatching {
-            WorkshopApi.library.getCoverById(trackId).whenComplete { bytes, error ->
-                if (error != null || bytes == null || bytes.isEmpty()) {
-                    inFlight.remove("cover:$trackId")
-                    log.log("cover missing id=$trackId error=${log.describe(error)}")
-                    return@whenComplete
-                }
-                executor.execute {
-                    val artwork = runCatching { decode(bytes, maxSide = 640, blur = false) }.getOrNull()
-                    if (artwork != null) {
-                        coverCache[trackId] = artwork
-                    }
-                    inFlight.remove("cover:$trackId")
-                }
-            }
-        }.onFailure {
-            inFlight.remove("cover:$trackId")
-            log.log("cover request failed id=$trackId: ${log.describe(it)}")
+    internal fun directoryCoverFile(path: String?): File? = path?.let { value -> runCatching {
+        if (value.startsWith("file:")) File(URI(value)) else File(value)
+    }.getOrNull() }?.takeIf { it.isFile }
+
+    private fun loadCover(key: CoverKey, context: DemandArtworkCache.Context): Artwork? = runCatching {
+        val digest = MessageDigest.getInstance("SHA-256").digest(key.source.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val file = coverDirectory?.resolve("$digest-${key.side}.png")
+        if (file?.isFile == true) {
+            val cached = runCatching { decode(readLocalImage(file), key.side, blur = key.hero) }.getOrNull()
+            if (cached != null) return@runCatching cached
+            context.commit { file.delete() }
         }
-        return coverCache[trackId]
+        if (!context.current()) return@runCatching null
+        // Fetch on the bounded worker, so waiting jobs never retain full encoded covers.
+        val bytes = key.file?.let(::readLocalImage)
+            ?: libraryCoverSource(key.source).toCompletableFuture().get(20, TimeUnit.SECONDS)
+        if (!context.current() || bytes == null || bytes.isEmpty()) return@runCatching null
+        var encoded: ByteArray? = null
+        val artwork = decode(bytes, key.side, blur = key.hero, thumbnail = { image ->
+            if (file != null) encoded = image.encodeToData(EncodedImageFormat.PNG)?.use { it.bytes }
+        }) ?: return@runCatching null
+        if (file != null && encoded != null) runCatching {
+            context.commit { atomicCacheWrite(file, encoded!!) }
+        }.onFailure { log.log("cover cache write failed: ${log.describe(it)}") }
+        artwork
+    }.onFailure { log.log("cover load failed source=${key.source}: ${log.describe(it)}") }.getOrNull()
+
+    private fun clearLibraryCovers(): Int {
+        var deleted = 0
+        covers.clear {
+            coverDirectory?.listFiles()?.filter { it.isFile }?.forEach { if (it.delete()) deleted++ }
+        }
+        return deleted
     }
 
     fun clear() {
         motionCache.clear()
-        coverCache.clear()
-        heroCoverCache.clear()
+        covers.clear()
         customPhotoCache.clear()
         localPhotoCache.clear()
         localLogoCache.clear()
@@ -464,6 +463,7 @@ class ArtworkStore(
 
     fun shutdown() {
         closed = true
+        covers.close()
         appleRequests.clear { }
         batchDownloads.close()
         motionCache.close()
@@ -478,21 +478,6 @@ class ArtworkStore(
         directoryAvatars.avatar(artistName, identity)
 
     internal fun directoryAvatarRevision(name: String): Pair<Long, Long> = directoryAvatars.revision(name)
-
-    /** Preserve native, user-selected directory covers without creating hero blur caches. */
-    fun directoryCover(path: String?): ImageBitmap? {
-        val file = path?.let { value -> runCatching {
-            if (value.startsWith("file:")) File(URI(value)) else File(value)
-        }.getOrNull() }?.takeIf { it.isFile } ?: return null
-        val key = "directory:${file.absolutePath}|${file.lastModified()}|${file.length()}"
-        coverCache[key]?.let { return it.image }
-        if (inFlight.putIfAbsent(key, true) == null) runCatching { executor.execute {
-            try {
-                runCatching { decode(readLocalImage(file), maxSide = 320, blur = false) }.getOrNull()?.let { coverCache[key] = it }
-            } finally { inFlight.remove(key) }
-        } }.onFailure { inFlight.remove(key) }
-        return null
-    }
 
     /** Explicit UI search runs on its caller's IO worker, separate from image loading. */
     fun searchArtistCandidates(query: String, identity: ArtistIdentityPolicy): List<ArtistMatchCandidate> =
@@ -513,7 +498,8 @@ class ArtworkStore(
         return image
     }
 
-    private fun decode(bytes: ByteArray, maxSide: Int = MAX_ART_SIDE, blur: Boolean = true): Artwork? {
+    private fun decode(bytes: ByteArray, maxSide: Int = MAX_ART_SIDE, blur: Boolean = true,
+                       thumbnail: ((Image) -> Unit)? = null): Artwork? {
         if (bytes.isEmpty()) return null
         val encoded = checkedImage(bytes)
         // 艺人写真常见 2000–4000px 的原图，后台先缩到页面需要的尺寸。
@@ -521,6 +507,7 @@ class ArtworkStore(
         // 独立过渡层里，否则首屏也会被透明像素和页面底色污染。
         val original = runCatching { paletteThumbnail(bytes) }.getOrNull()
         val skia = downscale(encoded, maxSide)
+        thumbnail?.invoke(skia)
         val image: ImageBitmap = skia.toComposeImageBitmap()
         val blurred = if (blur) runCatching { buildBlurSteps(skia) }.getOrDefault(emptyList()) else emptyList()
         val palette = original?.let { PaletteExtractor.extract(it) } ?: ArtworkPalette.Fallback
@@ -533,16 +520,15 @@ class ArtworkStore(
         val scale = maxSide.toFloat() / longest
         val w = (source.width * scale).toInt().coerceAtLeast(1)
         val h = (source.height * scale).toInt().coerceAtLeast(1)
-        val surface = Surface.makeRasterN32Premul(w, h)
-        surface.canvas.drawImageRect(
-            source,
-            Rect.makeWH(w.toFloat(), h.toFloat()),
-            Paint().apply { isAntiAlias = true },
-        )
-        val snapshot = surface.makeImageSnapshot()
-        surface.close()
-        source.close()
-        return snapshot
+        return source.use {
+            Surface.makeRasterN32Premul(w, h).use { surface ->
+                Paint().use { paint ->
+                    paint.isAntiAlias = true
+                    surface.canvas.drawImageRect(source, Rect.makeWH(w.toFloat(), h.toFloat()), paint)
+                }
+                surface.makeImageSnapshot()
+            }
+        }
     }
 
     /**
@@ -575,7 +561,6 @@ class ArtworkStore(
     }
 
     private companion object {
-        const val MAX_REQUESTS = 512
         const val EMPTY_RETRY_MS = 60_000L
         const val BLUR_SAMPLE_SIDE = 480
 

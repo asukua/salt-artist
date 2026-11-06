@@ -330,13 +330,13 @@ private fun DirectoryOption(label: String, selected: Boolean, click: () -> Unit)
 @Composable
 private fun DirectoryPortrait(artist: DirectoryArtist, stats: DirectoryStats, deps: ArtistScreenDeps, modifier: Modifier) {
     val identity = deps.settings.read().identityPolicy
-    val retained = remember(artist.name, identity.artistCacheToken(artist.name), deps.artwork.directoryAvatarRevision(artist.name), artist.coverPath, stats.coverId) {
+    val retained = remember(artist.name, identity.artistCacheToken(artist.name), deps.artwork.directoryAvatarRevision(artist.name), deps.artwork.coverGeneration, artist.coverPath, stats.coverId) {
         DirectoryPortraitMemory<androidx.compose.ui.graphics.ImageBitmap>()
     }
-    val portrait = retained.resolve(deps.artwork.artistAvatar(artist.name, identity)) {
-        deps.artwork.directoryCover(artist.coverPath)
-            ?: stats.coverId.takeIf(String::isNotBlank)?.let { deps.artwork.cover(it)?.image }
-    }
+    val avatar = deps.artwork.artistAvatar(artist.name, identity)
+    val customCover = if (avatar == null) rememberDirectoryCover(artist.coverPath, deps)?.image else null
+    val libraryCover = if (avatar == null && customCover == null) rememberLibraryCover(stats.coverId, deps)?.image else null
+    val portrait = retained.resolve(avatar) { customCover ?: libraryCover }
     Box(modifier.clip(CircleShape).background(directoryForeground.copy(alpha = 0.07f)), contentAlignment = Alignment.Center) {
         if (portrait != null) Image(portrait, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else SaltText(artist.name.take(1), size = 24.sp, color = directoryMuted)

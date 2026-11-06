@@ -1,0 +1,32 @@
+// Run with: gradlew -I scripts/verify-artwork.init.gradle verifyArtworkRuntime
+// Native CPU rendering stays separate from the lightweight and host-module unit suites.
+allprojects {
+    afterEvaluate {
+        extensions.getByName('kotlin').sourceSets.getByName('test').kotlin.srcDir(file('scripts/artwork-validation'))
+        def referenceDir = file('build/reports/artwork-032/reference')
+        referenceDir.mkdirs()
+        def baseline = new ProcessBuilder('git', 'show', '9d4acf0:src/main/kotlin/dev/saltartist/ui/ArtistCatalog.kt')
+            .directory(rootDir).start()
+        def reference = baseline.inputStream.getText('UTF-8')
+        if (baseline.waitFor() != 0) throw new GradleException('Could not read the 0.3.1 catalogue baseline')
+        reference = reference.replaceAll(/\b(ArtistCatalog|CatalogTrack|CatalogCover)\b/) { 'Legacy' + it[0] }
+            .replace('deps.artwork.cover(trackId)', 'rememberLibraryCover(trackId, deps, 640)')
+        new File(referenceDir, 'LegacyArtistCatalog.kt').setText(reference, 'UTF-8')
+        extensions.getByName('kotlin').sourceSets.getByName('test').kotlin.srcDir(referenceDir)
+        dependencies.add('testImplementation', 'org.jetbrains.skiko:skiko-awt:0.150.1')
+        dependencies.add('testRuntimeOnly', 'org.jetbrains.skiko:skiko-awt-runtime-windows-x64:0.150.1')
+        tasks.register('verifyArtworkRuntime', Test) {
+            dependsOn tasks.named('testClasses')
+            testClassesDirs = sourceSets.test.output.classesDirs
+            classpath = sourceSets.test.runtimeClasspath
+            filter.includeTestsMatching('dev.saltartist.ui.ArtistArtworkRuntimeTest')
+            systemProperty 'java.awt.headless', 'true'
+            jvmArgs '--enable-native-access=ALL-UNNAMED'
+            systemProperty 'artwork.verification.dir', file('build/reports/artwork-032').absolutePath
+            maxHeapSize = '512m'
+            reports.junitXml.outputLocation = file('build/reports/artwork-032/junit')
+            reports.html.outputLocation = file('build/reports/artwork-032/tests')
+            testLogging { events 'passed', 'failed'; showStandardStreams = true }
+        }
+    }
+}
