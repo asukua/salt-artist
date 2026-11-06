@@ -14,12 +14,14 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicText
@@ -44,6 +46,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
@@ -76,6 +79,7 @@ internal fun ArtistHero(
     meta: String,
     palette: ArtworkPalette,
     artwork: Artwork?,
+    portrait: ImageBitmap?,
     logo: ImageBitmap?,
     scroll: State<Float>,
     immersive: Boolean,
@@ -100,6 +104,13 @@ internal fun ArtistHero(
             .background(palette.backdropDeep),
     ) {
         val compact = maxWidth < 640.dp
+        if (!immersive) {
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                0f to lerp(palette.backdrop, palette.accent, 0.32f),
+                0.70f to lerp(palette.backdrop, palette.accent, 0.20f),
+                1f to palette.backdropDeep,
+            )))
+        }
         if (artwork != null && immersive && progress < 0.99f) {
             val imageAspect = artwork.image.width.toFloat() / artwork.image.height.coerceAtLeast(1)
             val wide = imageAspect >= 1.45f
@@ -215,12 +226,40 @@ internal fun ArtistHero(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth()
+                .then(if (immersive) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
                 .padding(horizontal = 28.dp)
-                .padding(bottom = 32.dp),
+                .padding(top = if (immersive) 0.dp else 28.dp, bottom = if (immersive) 32.dp else 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Bottom,
         ) {
-            if (logo != null) {
+            if (!immersive) {
+                // Keep the portrait square even when a long name needs two lines.
+                // Reuse the full artist avatar, rather than a directory thumbnail.
+                val portraitSize = if (compact) 176.dp else 196.dp
+                val portraitModifier = Modifier
+                    .weight(1f, fill = false)
+                    .sizeIn(maxWidth = portraitSize, maxHeight = portraitSize)
+                    .aspectRatio(1f)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.10f))
+                if (portrait != null) {
+                    Image(
+                        bitmap = portrait,
+                        contentDescription = "$name 头像",
+                        modifier = portraitModifier,
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Box(portraitModifier, contentAlignment = Alignment.Center) {
+                        BasicText(
+                            name.trim().take(1).ifEmpty { "♪" },
+                            style = TextStyle(color = Color.White, fontSize = 64.sp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+            }
+            if (logo != null && immersive) {
                 Image(
                     bitmap = logo,
                     contentDescription = name,
@@ -236,11 +275,13 @@ internal fun ArtistHero(
                     style = TextStyle(
                         fontFamily = ArtistTitleTypography.fontFamily,
                         color = Color.White,
-                        fontSize = if (compact) 46.sp else 62.sp,
-                        lineHeight = if (compact) 50.sp else 66.sp,
+                        fontSize = if (!immersive) { if (compact) 40.sp else 48.sp }
+                            else if (compact) 46.sp else 62.sp,
+                        lineHeight = if (!immersive) { if (compact) 46.sp else 54.sp }
+                            else if (compact) 50.sp else 66.sp,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
-                        shadow = Shadow(Color.Black.copy(alpha = 0.35f), Offset(0f, 2f), 12f),
+                        shadow = if (immersive) Shadow(Color.Black.copy(alpha = 0.35f), Offset(0f, 2f), 12f) else null,
                     ),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -253,19 +294,21 @@ internal fun ArtistHero(
             ) {
                 HeroCircle(
                     description = if (meta.isBlank()) "艺人信息" else "艺人信息，$meta",
+                    size = if (immersive) 38.dp else 48.dp,
                     onClick = onInfo,
                 ) {
-                    HeroInfoGlyph()
+                    HeroInfoGlyph(if (immersive) 15.dp else 19.dp)
                 }
                 HeroCircle(
                     description = "播放 $name",
-                    size = 56.dp,
+                    size = if (immersive) 56.dp else 72.dp,
                     primary = true,
                     enabled = enabled,
                     onClick = onPlay,
                 ) {
                     Box(Modifier.offset(x = 2.dp)) {
-                        PlayGlyph(Color(0xFF232325), 24.dp)
+                        PlayGlyph(if (immersive) Color(0xFF232325) else palette.backdrop,
+                            if (immersive) 24.dp else 30.dp)
                     }
                 }
                 HeroCircle(
@@ -273,9 +316,10 @@ internal fun ArtistHero(
                     modifier = Modifier.semantics {
                         stateDescription = if (isFavorite) "已收藏" else "未收藏"
                     },
+                    size = if (immersive) 38.dp else 48.dp,
                     onClick = onToggleFavorite,
                 ) {
-                    HeroStarGlyph(filled = isFavorite)
+                    HeroStarGlyph(filled = isFavorite, glyphSize = if (immersive) 17.dp else 22.dp)
                 }
             }
         }
@@ -336,8 +380,8 @@ private fun HeroCircle(
 }
 
 @Composable
-private fun HeroInfoGlyph() {
-    Canvas(Modifier.size(15.dp)) {
+private fun HeroInfoGlyph(glyphSize: Dp = 15.dp) {
+    Canvas(Modifier.size(glyphSize)) {
         val stroke = size.width * 0.12f
         drawCircle(Color.White, radius = stroke * 0.56f, center = Offset(size.width * 0.50f, size.height * 0.23f))
         drawLine(
@@ -351,8 +395,8 @@ private fun HeroInfoGlyph() {
 }
 
 @Composable
-private fun HeroStarGlyph(filled: Boolean) {
-    Canvas(Modifier.size(17.dp)) {
+private fun HeroStarGlyph(filled: Boolean, glyphSize: Dp = 17.dp) {
+    Canvas(Modifier.size(glyphSize)) {
         val path = Path()
         val center = Offset(size.width / 2f, size.height / 2f)
         val outer = size.minDimension * 0.46f

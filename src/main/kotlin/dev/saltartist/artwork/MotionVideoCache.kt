@@ -13,9 +13,9 @@ import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class PreparedMotion(val master: String, val quality: MotionResolution, val location: String,
-                                   val remote: String, val cached: Boolean)
+                                   val remote: String, val cached: Boolean, internal val cacheGeneration: Long? = null)
 
-/** Bounded, atomic VOD caching. No decoder/GPU object is retained between pages. */
+/** Atomic offline VOD caching. No decoder/GPU object is retained between pages. */
 internal class MotionVideoCache(
     pluginDir: File?, private val log: PluginLog,
     private val manifest: (String) -> String = ::loadAppleMotionManifest,
@@ -32,80 +32,124 @@ internal class MotionVideoCache(
     private val executor = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, ArrayBlockingQueue(4),
         { task -> Thread(task, "SaltArtist-motion-cache").apply { isDaemon = true; contextClassLoader = ClassLoader.getPlatformClassLoader() } })
 
-    fun prepare(url: String, quality: MotionResolution): PreparedMotion {
+    fun prepare(url: String, quality: MotionResolution): PreparedMotion =
+        prepare(url, quality, synchronized(lock) { generation })
+
+    private fun prepare(url: String, quality: MotionResolution, expected: Long): PreparedMotion {
         require(isAppleMotionUrl(url))
         val key = key(url, quality)
         synchronized(lock) {
-            file(key, ".mp4")?.takeIf(::validMovie)?.let {
+            file(key, ".mp4")?.takeIf { current(expected) && validMovie(it) }?.let {
                 it.setLastModified(System.currentTimeMillis())
                 // libmpv on Windows expects a filesystem path; java.io.File's
                 // single-slash file:/C:/ URI is not a playable local URL here.
-                return PreparedMotion(url, quality, it.absolutePath, streams[key] ?: readStream(key) ?: url, true)
+                return PreparedMotion(url, quality, it.absolutePath, streams[key] ?: readStream(key) ?: url, true, expected)
             }
         }
-        return remote(url, quality)
+        return remote(url, quality, expected)
     }
 
-    fun remote(url: String, quality: MotionResolution): PreparedMotion {
+    fun remote(url: String, quality: MotionResolution): PreparedMotion =
+        remote(url, quality, synchronized(lock) { generation })
+
+    private fun remote(url: String, quality: MotionResolution, expected: Long): PreparedMotion {
+        require(isAppleMotionUrl(url))
         val key = key(url, quality)
-        val hit = synchronized(lock) { streams[key] ?: readStream(key)?.also { streams[key] = it } }
+        val hit = synchronized(lock) {
+            if (!current(expected)) null else streams[key] ?: readStream(key)?.also { streams[key] = it }
+        }
         val resolved = hit ?: if (URI(url).path.lowercase().endsWith(".m3u8")) runCatching {
             selectAppleMotionVariant(url, manifest(url), quality) ?: url
         }.getOrDefault(url) else url
         require(isAppleMotionUrl(resolved))
         synchronized(lock) {
-            streams[key] = resolved
-            file(key, ".stream")?.let { path -> runCatching { path.parentFile.mkdirs(); path.writeText(resolved) } }
+            if (current(expected)) {
+                streams[key] = resolved
+                file(key, ".stream")?.let { path -> runCatching { path.parentFile.mkdirs(); path.writeText(resolved) } }
+            }
         }
-        return PreparedMotion(url, quality, resolved, resolved, false)
+        return PreparedMotion(url, quality, resolved, resolved, false, expected)
     }
 
     /** Called only once the first live frame is displayed, so caching cannot delay first paint. */
-    fun warm(source: PreparedMotion): CompletableFuture<File?> {
-        if (source.cached || directory == null || closed.get()) return CompletableFuture.completedFuture(null)
-        val key = key(source.master, source.quality)
+    fun warm(source: PreparedMotion): CompletableFuture<File?> = enqueue(source.master, source.quality, source)
+
+    /** Resolve the selected quality and persist its full movie without blocking the caller. */
+    fun downloadForOffline(url: String, quality: MotionResolution): CompletableFuture<File?> = enqueue(url, quality)
+
+    private fun enqueue(url: String, quality: MotionResolution, prepared: PreparedMotion? = null): CompletableFuture<File?> {
+        if (directory == null || closed.get()) return CompletableFuture.completedFuture(null)
+        val key = key(url, quality)
         val result = CompletableFuture<File?>()
-        inFlight.putIfAbsent(key, result)?.let { return it }
-        val expected = synchronized(lock) { generation }
+        val expected: Long
+        val requestKey: String
+        synchronized(lock) {
+            if (closed.get() || (prepared?.cacheGeneration != null && prepared.cacheGeneration != generation))
+                return CompletableFuture.completedFuture(null)
+            expected = generation
+            requestKey = "$key:$expected"
+            inFlight.putIfAbsent(requestKey, result)?.let { return it }
+        }
+        fun finish(file: File?) {
+            val completed = file?.takeIf { current(expected) }
+            inFlight.remove(requestKey, result)
+            result.complete(completed)
+        }
         runCatching { executor.execute {
             var part: File? = null
             try {
+                if (!current(expected)) { finish(null); return@execute }
+                var source = prepared ?: prepare(url, quality, expected)
+                if (!current(expected) || source.cacheGeneration?.let { it != expected } == true) {
+                    finish(null); return@execute
+                }
+                val cached = synchronized(lock) {
+                    file(key, ".mp4")?.takeIf { current(expected) && validMovie(it) }
+                }
+                if (cached != null) { finish(cached); return@execute }
+                if (source.cached) source = remote(url, quality, expected)
                 val movieUrl = if (URI(source.remote).path.lowercase().endsWith(".m3u8"))
                     singleFileMotionMovie(source.remote, manifest(source.remote)) else source.remote
-                if (movieUrl == null || closed.get()) { result.complete(null); return@execute }
+                if (movieUrl == null || !current(expected)) { finish(null); return@execute }
                 val destination = checkNotNull(file(key, ".mp4"))
                 destination.parentFile.mkdirs()
                 val staging = file(key, ".${UUID.randomUUID()}.part")!!
                 part = staging
                 download(movieUrl, staging)
                 require(validMovie(staging)) { "Incomplete motion movie" }
-                synchronized(lock) {
-                    if (closed.get() || generation != expected) result.complete(null)
+                val publishedBytes = synchronized(lock) {
+                    if (!current(expected)) null
                     else {
                         try { Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING) }
                         catch (_: java.nio.file.AtomicMoveNotSupportedException) { Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING) }
-                        prune(destination)
-                        result.complete(destination)
-                        log.log("motion video cached quality=${source.quality.label} bytes=${destination.length()}")
+                        destination.length()
                     }
                 }
+                finish(destination.takeIf { publishedBytes != null })
+                if (publishedBytes != null) log.log("motion video cached quality=${quality.label} bytes=$publishedBytes")
             } catch (error: Throwable) {
                 log.logOnce("motion-cache-$key", "motion cache skipped; stream remains available: ${error.javaClass.simpleName}")
-                result.complete(null)
-            } finally { part?.delete(); inFlight.remove(key, result) }
-        } }.onFailure { inFlight.remove(key, result); result.complete(null) }
+                finish(null)
+            } finally { part?.delete(); inFlight.remove(requestKey, result) }
+        } }.onFailure { inFlight.remove(requestKey, result); result.complete(null) }
         return result
     }
+
+    private fun current(expected: Long): Boolean = synchronized(lock) { !closed.get() && generation == expected }
 
     fun invalidate(url: String, quality: MotionResolution) = synchronized(lock) {
         val key = key(url, quality)
         file(key, ".mp4")?.delete()
     }
 
-    fun clear() = synchronized(lock) {
-        generation++
-        streams.clear()
-        directory?.listFiles()?.filter { it.isFile && it.name.startsWith("motion-") }?.forEach { it.delete() }
+    fun clear() {
+        val cancelled = synchronized(lock) {
+            generation++
+            streams.clear()
+            directory?.listFiles()?.filter { it.isFile && it.name.startsWith("motion-") }?.forEach { it.delete() }
+            inFlight.values.toList().also { inFlight.clear() }
+        }
+        cancelled.forEach { it.complete(null) }
     }
 
     private fun readStream(key: String): String? = file(key, ".stream")?.takeIf {
@@ -116,23 +160,14 @@ internal class MotionVideoCache(
     private fun key(url: String, quality: MotionResolution) = MessageDigest.getInstance("SHA-256")
         .digest("$url\n${quality.name}".toByteArray()).joinToString("") { "%02x".format(it) }
 
-    private fun prune(protected: File) {
-        val movies = directory?.listFiles()?.filter { it.name.startsWith("motion-") && it.extension == "mp4" && it.isFile }
-            ?.sortedBy { it.lastModified() }.orEmpty().toMutableList()
-        var total = movies.sumOf { it.length() }
-        while (movies.size > 8 || total > 512L * 1024 * 1024) {
-            val oldest = movies.firstOrNull { it != protected } ?: break
-            movies.remove(oldest)
-            total -= oldest.length()
-            oldest.delete()
-        }
-    }
-
     override fun close() {
-        closed.set(true)
-        synchronized(lock) { generation++ }
+        if (!closed.compareAndSet(false, true)) return
+        val cancelled = synchronized(lock) {
+            generation++
+            inFlight.values.toList().also { inFlight.clear() }
+        }
         executor.shutdownNow()
-        inFlight.values.forEach { it.complete(null) }
+        cancelled.forEach { it.complete(null) }
     }
 }
 

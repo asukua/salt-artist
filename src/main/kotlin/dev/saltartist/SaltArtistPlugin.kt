@@ -105,6 +105,7 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
             settings = ArtistSettings(config),
             profiles = ArtistProfileStore(pluginDir, log),
             log = log,
+            directoryTargets = targets.directory,
         )
         deps = screenDeps
         screenDeps.repository.ensureLoaded()
@@ -133,8 +134,7 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
         log.log("hook installed=${hookHandle != null}")
         if (hookHandle == null) {
             // 主覆盖层失败时保留完整原生页，不能继续单独隐藏它的头像。
-            store.shutdown()
-            screenDeps.settings.close()
+            screenDeps.close()
             deps = null
             return
         }
@@ -161,6 +161,7 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
         }.getOrNull().orEmpty()
         log.log("avatar hook installed=${avatarHandles.size}")
         installDirectoryHooks(targets, screenDeps)
+        activeDeps = screenDeps
     }
 
     private fun installDirectoryHooks(targets: HookTargets.HostTargets, screenDeps: ArtistScreenDeps) {
@@ -243,8 +244,8 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
         avatarHandles = emptyList()
         hookHandle?.let { handle -> runCatching { handle.unhook() }.onFailure { log.log("unhook failed: ${log.describe(it)}") } }
         hookHandle = null
-        deps?.settings?.close()
-        deps?.artwork?.shutdown()
+        if (activeDeps === deps) activeDeps = null
+        deps?.close()
         deps = null
         log.log("stopped")
     }
@@ -274,6 +275,31 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
     /** 设置页按钮：打开写真目录，用户把高清写真按艺人名放进去即可。 */
     companion object {
         private const val CONFIG_FILE = "artist-page.json"
+        @Volatile private var activeDeps: ArtistScreenDeps? = null
+
+        @JvmStatic
+        fun downloadAllArtistData() {
+            val runtime = activeDeps
+            if (runtime?.directoryTargets == null) {
+                WorkshopApi.ui.toast("请先启用插件，并使用已支持的宿主版本", WorkshopApi.Ui.ToastType.Warning)
+                return
+            }
+            runtime.downloadAllArtists()
+            WorkshopApi.ui.toast("艺人资料将在后台下载，可在艺术家列表查看进度", WorkshopApi.Ui.ToastType.Success)
+        }
+
+        @JvmStatic
+        fun artistDownloadProgress() {
+            val runtime = activeDeps ?: return
+            val progress = runtime.artwork.batchDownloads.progress
+            val message = if (runtime.preparingDownloads.value) "正在读取完整艺人列表…"
+                else if (progress.total == 0) "尚未开始下载"
+                else "${if (progress.running) "下载中" else if (progress.cancelled) "已取消" else "已完成"} ${progress.completed}/${progress.total}；已缓存 ${progress.available}，未匹配或暂不可用 ${progress.unavailable}，需重试 ${progress.retry}"
+            WorkshopApi.ui.toast(message, WorkshopApi.Ui.ToastType.Success)
+        }
+
+        @JvmStatic
+        fun cancelArtistDownloads() { activeDeps?.cancelArtistDownloads() }
 
         @JvmStatic
         fun openPhotoDirectory() {
@@ -288,6 +314,16 @@ class SaltArtistPlugin(pluginContext: PluginContext) : SpwPlugin(pluginContext) 
         /** 设置页按钮：清空从 Apple Music 抓来的头图与艺术字缓存。 */
         @JvmStatic
         fun clearAppleMusicCache() {
+            activeDeps?.let { runtime ->
+                runtime.cancelArtistDownloads()
+                runtime.artwork.clearAppleMusicCache().whenComplete { files, error ->
+                    runCatching { WorkshopApi.ui.toast(
+                        if (error == null) "已清除 Apple Music 缓存（$files 个文件）" else "缓存清除失败，请稍后重试",
+                        if (error == null) WorkshopApi.Ui.ToastType.Success else WorkshopApi.Ui.ToastType.Warning,
+                    ) }
+                }
+                return
+            }
             runCatching {
                 val config = WorkshopApi.manager.createConfigManager().getConfig(CONFIG_FILE)
                 val dir = config.getConfigPath().parent.toFile()

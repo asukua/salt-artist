@@ -89,12 +89,18 @@ internal class ArtistStorefrontHealth(private val now: () -> Long = System::curr
     private companion object { val DEFAULT = ArtistIdentityPolicy.DEFAULT_STOREFRONTS.split(',') }
 }
 
+internal data class IdentityResolution(val artistId: String?, val retryable: Boolean = false)
+
 internal class ArtistIdentityResolver(private val get: (String) -> String?, private val log: PluginLog,
                                       private val health: ArtistStorefrontHealth = ArtistStorefrontHealth()) {
-    private data class Hit(val id: String?, val until: Long)
+    private data class Hit(val result: IdentityResolution, val until: Long)
+    private data class VerifiedNames(val names: Set<String>, val until: Long, val retryable: Boolean)
+    private class Attempt(var retryable: Boolean = false)
     private val resolutions = ConcurrentHashMap<String, Hit>()
-    private val verifiedIds = ConcurrentHashMap<String, Pair<Set<String>, Long>>()
+    private val verifiedIds = ConcurrentHashMap<String, VerifiedNames>()
     private val searches = ConcurrentHashMap<String, Pair<List<ArtistSearchCandidate>, Long>>()
+
+    fun clear() { resolutions.clear(); verifiedIds.clear(); searches.clear() }
 
     fun forget(name: String) {
         val suffix = "|${artistIdentityKey(name)}"
@@ -102,32 +108,37 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
         searches.keys.removeIf { it.endsWith(suffix) }
     }
 
-    fun resolve(name: String, policy: ArtistIdentityPolicy): String? {
+    fun resolve(name: String, policy: ArtistIdentityPolicy): String? = resolveResult(name, policy).artistId
+
+    fun resolveResult(name: String, policy: ArtistIdentityPolicy): IdentityResolution {
         val key = policy.artistCacheToken(name) + "|" + artistIdentityKey(name)
         val now = System.currentTimeMillis()
-        resolutions[key]?.takeIf { now < it.until }?.let { return it.id }
-        val resolved = runCatching { resolveUncached(name, policy) }.onFailure {
+        resolutions[key]?.takeIf { now < it.until }?.let { return it.result }
+        val attempt = Attempt()
+        val resolved = runCatching { resolveUncached(name, policy, attempt) }.onFailure {
+            attempt.retryable = true
             log.log("apple-music identity unavailable: ${it.javaClass.simpleName}")
         }.getOrNull()
-        resolutions[key] = Hit(resolved, now + if (resolved == null) NEGATIVE_MS else RETRY_MS)
-        return resolved
+        val result = IdentityResolution(resolved, retryable = resolved == null && attempt.retryable)
+        resolutions[key] = Hit(result, now + if (resolved == null) NEGATIVE_MS else RETRY_MS)
+        return result
     }
 
-    private fun resolveUncached(name: String, policy: ArtistIdentityPolicy): String? {
+    private fun resolveUncached(name: String, policy: ArtistIdentityPolicy, attempt: Attempt): String? {
         val wanted = artistIdentityKey(name)
         if (wanted.isEmpty()) return null
         if (policy.enabled) {
             val custom = parseOverrides(policy.overrides)
             if (wanted in custom.rejected) return null
-            custom.ids[wanted]?.let { id -> return id.takeIf { verifiedNames(it, policy).isNotEmpty() } }
+            custom.ids[wanted]?.let { id -> return id.takeIf { verifiedNames(it, policy, attempt = attempt).isNotEmpty() } }
             GROUPS.firstOrNull { wanted in it.names }?.let { group ->
-                return group.id.takeIf { verifiedNames(it, policy, group.names).any(group.names::contains) }
+                return group.id.takeIf { verifiedNames(it, policy, group.names, attempt).any(group.names::contains) }
             }
             // Variants in the extended table may reuse an already verified ID,
             // but an unrelated lookup name can never validate that mapping.
             ArtistAliasRegistry.groupsFor(name).firstOrNull { it.id != null }?.let { group ->
                 val id = checkNotNull(group.id)
-                if (verifiedNames(id, policy, group.names).any(group.names::contains)) return id
+                if (verifiedNames(id, policy, group.names, attempt).any(group.names::contains)) return id
             }
         }
         val candidates = arrayListOf<ArtistSearchCandidate>()
@@ -138,6 +149,7 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
                     "&entity=musicArtist&attribute=artistTerm&country=$country&limit=8"
                 val found = fetch(url)?.let(AppleMusicPageParser::artistSearchCandidatesOrNull)
                 if (found == null) {
+                    attempt.retryable = true
                     health.unavailable(country, policy.storefrontOrder)
                     continue
                 }
@@ -169,7 +181,7 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
         // A localized official name may only occur in lookup or the artist header.
         val names = linkedMapOf<String, MutableSet<String>>()
         for (country in health.attempts(policy.storefrontOrder)) {
-            val found = lookup(ids, country, policy.storefrontOrder)
+            val found = lookup(ids, country, policy.storefrontOrder, attempt)
             found.forEach { (id, values) -> names.getOrPut(id) { linkedSetOf() }.addAll(values) }
         }
         val lookupMatches = names.filterValues { wanted in it }.keys
@@ -186,8 +198,9 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
         val matches = ids.filter { id ->
             health.attempts(policy.storefrontOrder).any { country ->
                 val url = "https://music.apple.com/${country.lowercase(Locale.ROOT)}/artist/$id?l=$language"
-                fetch(url)?.let { AppleMusicPageParser.artistNamesFromHtml(it, id, url) }
-                    .orEmpty().any { artistIdentityKey(it) == wanted }
+                val names = fetch(url)?.let { AppleMusicPageParser.artistNamesFromHtml(it, id, url) }.orEmpty()
+                if (names.isEmpty()) attempt.retryable = true
+                names.any { artistIdentityKey(it) == wanted }
             }
         }
         val eligible = candidates.filter { it.id in matches }.distinctBy { it.id }.map { CandidateSignals(it) }
@@ -287,31 +300,39 @@ internal class ArtistIdentityResolver(private val get: (String) -> String?, priv
     private fun fetch(url: String): String? = runCatching { get(url) }.getOrNull()
 
     private fun verifiedNames(id: String, policy: ArtistIdentityPolicy,
-                              expectedNames: Set<String>? = null): Set<String> = synchronized(verifiedIds) {
+                              expectedNames: Set<String>? = null, attempt: Attempt? = null): Set<String> = synchronized(verifiedIds) {
         val key = policy.storefrontOrder.joinToString(",") + "|" + id
         val now = System.currentTimeMillis()
-        verifiedIds[key]?.takeIf { now < it.second }?.let { cached ->
-            if (expectedNames == null || cached.first.isEmpty() || cached.first.any(expectedNames::contains)) return@synchronized cached.first
+        verifiedIds[key]?.takeIf { now < it.until }?.let { cached ->
+            if (expectedNames == null || cached.names.isEmpty() || cached.names.any(expectedNames::contains)) {
+                if (cached.retryable) attempt?.retryable = true
+                return@synchronized cached.names
+            }
         }
         val collected = linkedSetOf<String>()
+        val lookupAttempt = Attempt()
         for (country in health.attempts(policy.storefrontOrder)) {
-            val names = lookup(listOf(id), country, policy.storefrontOrder)[id].orEmpty()
+            val names = lookup(listOf(id), country, policy.storefrontOrder, lookupAttempt)[id].orEmpty()
             if (names.isNotEmpty()) {
                 collected += names
                 if (expectedNames == null || names.any(expectedNames::contains)) {
-                    verifiedIds[key] = collected to (now + VERIFIED_MS)
+                    verifiedIds[key] = VerifiedNames(collected, now + VERIFIED_MS, retryable = false)
                     return@synchronized collected
                 }
             }
         }
-        verifiedIds[key] = collected to (now + if (collected.isEmpty()) NEGATIVE_MS else VERIFIED_MS)
+        if (lookupAttempt.retryable) attempt?.retryable = true
+        verifiedIds[key] = VerifiedNames(collected, now + if (collected.isEmpty()) NEGATIVE_MS else VERIFIED_MS, lookupAttempt.retryable)
         collected
     }
 
-    private fun lookup(ids: List<String>, country: String, configured: List<String>): Map<String, Set<String>> {
+    private fun lookup(ids: List<String>, country: String, configured: List<String>, attempt: Attempt? = null): Map<String, Set<String>> {
         val url = "https://itunes.apple.com/lookup?id=${ids.joinToString(",")}&country=$country"
         val response = fetch(url)?.let(AppleMusicPageParser::artistSearchCandidatesOrNull)
-        if (response == null) health.unavailable(country, configured)
+        if (response == null) {
+            attempt?.retryable = true
+            health.unavailable(country, configured)
+        }
         return response.orEmpty().filter { it.id in ids }.groupBy { it.id }
             .mapValues { (_, items) -> items.map { artistIdentityKey(it.name) }.toSet() }
     }

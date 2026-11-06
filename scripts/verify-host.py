@@ -210,6 +210,63 @@ def main():
                 count = len(re.findall(r"^\s+\d+: invokestatic\s+#" + str(directory_refs[0]["cpIndex"]) + r"\s", navigation_dump, re.MULTILINE))
                 check("directory one navigation UI invocation", count == 1, count)
 
+        # Verify additive background/batch interfaces alongside the original directory contracts.
+        # Discover from source markers/signatures instead of duplicating HookTargets.
+        directory_screens = []
+        for entry in archive.namelist():
+            if entry.endswith(".class") and b"com.xuncorp.voxzen.ui.screen.artist.ArtistScreen (ArtistScreen.kt:" in archive.read(entry):
+                directory_screens.append(entry[:-6])
+        check("one native artist directory screen", len(directory_screens) == 1, directory_screens)
+        if len(directory_screens) == 1:
+            directory_name = directory_screens[0]
+            directory = read(directory_name)
+            directory_dump = dump("directory-screen", directory_name)
+            scaffold_pattern = re.compile(r"\(Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function2;Ljava/lang/String;Ljava/lang/String;"
+                                          r"Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function4;L([^;]+);"
+                                          r"Lkotlin/jvm/functions/Function4;Landroidx/compose/runtime/Composer;II\)V\Z")
+            scaffolds = [ref for ref in directory["refs"] if scaffold_pattern.fullmatch(ref["descriptor"])]
+            check("one directory BasicScreenBox callback contract", len(scaffolds) == 1, scaffolds)
+            if len(scaffolds) == 1:
+                scaffold = scaffolds[0]
+                dump("directory-scaffold", scaffold["owner"])
+                report["directoryAppearance"] = {"screen": directory_name, "scaffold": scaffold,
+                                                  "options": scaffold_pattern.fullmatch(scaffold["descriptor"]).group(1)}
+            check("directory calls native LazyVerticalGrid", any(ref["owner"] == "androidx/compose/foundation/lazy/grid/LazyGridDslKt"
+                                                                  and ref["name"] == "LazyVerticalGrid" for ref in directory["refs"]))
+            vm_candidates = [member for member in directory["members"] if member["access"] & 9 == 9 and
+                             re.fullmatch(r"\(Landroidx/compose/ui/[^;]+;Landroidx/compose/runtime/Composer;II\)V", member["descriptor"])]
+            check("one directory view model contract", len(vm_candidates) == 1, vm_candidates)
+            if len(vm_candidates) == 1:
+                vm_name = vm_candidates[0]["descriptor"].split(';')[0][2:]
+                dump("directory-view-model", vm_name)
+                vm_getters = [member for member in read(vm_name)["members"] if member["kind"] == "method" and
+                              member["access"] & 1 == 1 and member["descriptor"] == "()Lkotlinx/coroutines/flow/StateFlow;"]
+                check("one directory view model StateFlow getter", len(vm_getters) == 1 and vm_getters[0]["name"] == "\u052a", vm_getters)
+                nav_refs = [ref for ref in nav["refs"] if ref["owner"] == directory_name and
+                            ref["descriptor"] == f"(L{vm_name};Landroidx/compose/runtime/Composer;II)V"]
+                check("one directory navigation callsite reference", len(nav_refs) == 1, nav_refs)
+                repos = [ref for ref in read(vm_name)["refs"] if ref["owner"].startswith("androidx/compose/ui/") and
+                         ref["descriptor"] == "()Lkotlinx/coroutines/flow/Flow;"]
+                check("one unfiltered artist repository flow", len(repos) == 1, repos)
+                if len(repos) == 1:
+                    dump("directory-artist-repository", repos[0]["owner"])
+                    report["directoryArtistRepository"] = repos[0]
+            for label, name, method, descriptor in [
+                ("directory-theme-locals", "androidx/compose/ui/\u02b6", "\u037f", "()Landroidx/compose/runtime/ProvidableCompositionLocal;"),
+                ("directory-theme-locals", "androidx/compose/ui/\u02b6", "\u0528", "()Landroidx/compose/runtime/ProvidableCompositionLocal;"),
+                ("directory-theme-configs", "androidx/compose/ui/\u02e4", "\u037f", "(Landroidx/compose/ui/\u02e4;Z)Landroidx/compose/ui/\u02e4;"),
+            ]:
+                dump(label, name)
+                check(label + " ABI", member_exists(name, method, descriptor, 9))
+            for label, name, method, descriptor in [
+                ("directory-theme-configs", "androidx/compose/ui/\u02e4", "\u037f", "()Z"),
+                ("directory-theme-colors", "androidx/compose/ui/\u02b4", "\u037f", "()Landroidx/compose/ui/\u0374;"),
+                ("directory-theme-colors", "androidx/compose/ui/\u02b4", "\u0528", "()Landroidx/compose/ui/\u0374;"),
+                ("directory-theme-palette", "androidx/compose/ui/\u0374", "\u052a", "()J"),
+            ]:
+                dump(label, name)
+                check(label + "." + method + descriptor, member_exists(name, method, descriptor, 1))
+
         contracts = [
             ("playback-controller", "com/xuncorp/voxzen/service/PlaybackController", [
                 ("INSTANCE", "Lcom/xuncorp/voxzen/service/PlaybackController;", 0x0001 | 0x0008),

@@ -262,8 +262,13 @@ internal object AppleMusicPageParser {
         val text = plainText(value)?.takeIf { it.length in 12..30_000 } ?: return null
         val actual = when {
             text.count { it in '\u3040'..'\u30ff' } >= 5 -> PreferredArtistLanguage.JAPANESE
-            chineseBiography(text) != null -> PreferredArtistLanguage.CHINESE
-            text.count { it in 'a'..'z' || it in 'A'..'Z' } >= 20 -> PreferredArtistLanguage.ENGLISH
+            text.count { it in '\uac00'..'\ud7af' } >= 5 -> PreferredArtistLanguage.KOREAN
+            chineseBiography(text) != null -> ChineseScript.language(text, requested)
+            text.count { it in 'a'..'z' || it in 'A'..'Z' } >= 20 -> when (requested) {
+                PreferredArtistLanguage.FRENCH, PreferredArtistLanguage.GERMAN, PreferredArtistLanguage.SPANISH,
+                PreferredArtistLanguage.ITALIAN, PreferredArtistLanguage.PORTUGUESE, PreferredArtistLanguage.DUTCH -> requested
+                else -> PreferredArtistLanguage.ENGLISH
+            }
             else -> return null
         }
         return (text to actual).takeIf { allowOtherLanguages || actual == requested }

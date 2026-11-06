@@ -137,7 +137,7 @@ internal fun ArtistMatcher(
                         horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             SaltText(candidate.name, size = 15.sp, weight = FontWeight.SemiBold, color = Color.White, maxLines = 2)
-                            SaltText("Apple Music · ID ${candidate.id}", size = 11.sp, color = Color.White.copy(alpha = 0.5f))
+                            SaltText("ID ${candidate.id}", size = 11.sp, color = Color.White.copy(alpha = 0.5f))
                         }
                         MatcherAction("查看", { runCatching { Desktop.getDesktop().browse(URI(candidate.url)) } })
                         MatcherAction(if (options.recognizeAliases) "匹配" else "匹配并启用", {

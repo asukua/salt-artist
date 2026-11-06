@@ -14,6 +14,8 @@ import dev.saltartist.am.artistIdentityKey
 import dev.saltartist.am.ArtistLanguagePolicy
 import dev.saltartist.am.ArtistVisualPolicy
 import dev.saltartist.am.ArtistIdentityPolicy
+import dev.saltartist.am.DownloadResolutionStatus
+import dev.saltartist.settings.MotionResolution
 import dev.saltartist.am.ArtistMatchCandidate
 import dev.saltartist.data.normalizeArtistKey
 import org.jetbrains.skia.FilterTileMode
@@ -31,6 +33,7 @@ import java.net.URI
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicInteger
 import javax.imageio.ImageIO
 
@@ -53,9 +56,8 @@ class ArtworkStore(
         Thread(runnable, "salt-artist-artwork").apply { isDaemon = true }
     }
     // Slow catalog/profile requests must not hold up local photos and library covers.
-    private val appleExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "salt-artist-apple").apply { isDaemon = true }
-    }
+    private val appleExecutor = ArtistRequestQueue()
+    val batchDownloads = ArtistBatchDownloader()
     private val appleLocalExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "salt-artist-apple-cache").apply { isDaemon = true }
     }
@@ -118,14 +120,14 @@ class ArtworkStore(
      */
     fun appleArt(artistName: String, policy: ArtistLanguagePolicy = ArtistLanguagePolicy(),
                  identity: ArtistIdentityPolicy = ArtistIdentityPolicy(enabled = false),
-                 visual: ArtistVisualPolicy? = null): AmArt? {
+                 visual: ArtistVisualPolicy? = null, checkForUpdates: Boolean = false): AmArt? {
         if (closed) return null
         val cat = catalog ?: return null
         // Each queued request captures its own immutable matching policy. A late
         // result cannot become the image selected after a preference change.
         val key = appleArtworkCacheKey(artistName, policy, identity, visual)
         appleCache[key]?.let { hit ->
-            if (!hit.retryable || System.currentTimeMillis() - (appleCompletedAt[key] ?: 0L) < EMPTY_RETRY_MS) return hit
+            if (!checkForUpdates && (!hit.retryable || System.currentTimeMillis() - (appleCompletedAt[key] ?: 0L) < EMPTY_RETRY_MS)) return hit
         }
         val artistKey = artistIdentityKey(artistName)
         val generation = appleRequests.generation(artistKey)
@@ -179,13 +181,79 @@ class ArtworkStore(
                     log.logOnce("local-art:$key", "apple-music local assets artist=\"$artistName\" ms=${(System.nanoTime() - start) / 1_000_000}")
                     if (!local.retryable && cat.cachedIsFresh(artistName, policy, identity, visual)) return@execute
                 }
-                if (current()) { appleExecutor.execute(::refresh); remoteScheduled = true }
+                if (current()) { appleExecutor.submit { refresh() }; remoteScheduled = true }
             } catch (error: Throwable) {
-                if (current()) { appleExecutor.execute(::refresh); remoteScheduled = true }
+                if (current()) { appleExecutor.submit { refresh() }; remoteScheduled = true }
                 log.log("apple-music local cache unavailable: ${log.describe(error)}")
             } finally { if (!remoteScheduled) appleInFlight.remove(requestKey) }
         } }.onFailure { appleInFlight.remove(requestKey) }
         return appleCache[key]
+    }
+
+    /** Cache encoded artwork and complete movies without decoding the entire library. */
+    @JvmOverloads
+    fun prefetchArtist(name: String, policy: ArtistLanguagePolicy, identity: ArtistIdentityPolicy,
+                       visual: ArtistVisualPolicy = ArtistVisualPolicy(),
+                       motionResolution: MotionResolution = MotionResolution.FULL_HD): CompletableFuture<ArtistDownloadResult> {
+        val artist = artistIdentityKey(name)
+        val generation = appleRequests.generation(artist)
+        fun current() = !closed && appleRequests.generation(artist) == generation
+        fun mutate(update: () -> Unit) { appleRequests.publish(artist, generation) { if (!closed) update() } }
+        val prepared = appleExecutor.submit(background = true) {
+            val cat = catalog ?: return@submit PreparedArtistDownload(ArtistDownloadResult.UNAVAILABLE)
+            if (!current()) return@submit PreparedArtistDownload(ArtistDownloadResult.RETRY)
+            val resolution = cat.resolveForDownload(name, policy, identity, visual)
+            val meta = resolution.artist ?: return@submit PreparedArtistDownload(when (resolution.status) {
+                DownloadResolutionStatus.NOT_FOUND -> ArtistDownloadResult.UNAVAILABLE
+                else -> ArtistDownloadResult.RETRY
+            }.also { log.log("apple-music download artist=\"$name\" result=$it reason=${resolution.status}") })
+            val assets = listOfNotNull(
+                meta.heroTemplate?.let { cat.heroFile(name, identity, visual) to cat.imageUrl(it, meta.heroCrop, 1600, if (meta.heroIsWide) 800 else 1600) },
+                meta.logoTemplate?.let { cat.logoFile(name, identity) to cat.imageUrl(it, meta.logoCrop, 1000, 320, "png") },
+                meta.avatarTemplate?.let { cat.avatarFile(name, identity) to cat.imageUrl(it, meta.avatarCrop, 900, 900) },
+            )
+            val complete = assets.map { (file, url) ->
+                if (!current()) return@map false
+                var bytes = loadImage(file, url, ::mutate)
+                if (bytes != null && runCatching { checkedImage(bytes!!).close() }.isFailure) {
+                    mutate { file?.delete() }
+                    bytes = if (current()) loadImage(file, url, ::mutate) else null
+                }
+                val valid = bytes != null && file?.isFile == true && runCatching { checkedImage(bytes!!).close() }.isSuccess
+                if (!valid) mutate { file?.delete() }
+                valid
+            }.all { it }
+            if (!current()) PreparedArtistDownload(ArtistDownloadResult.RETRY)
+            else {
+                directoryAvatars.warm(name, identity)
+                // A usable fallback can be fully cached while an earlier region
+                // still needs a refresh. Freshness controls background checks,
+                // not whether this artist's download succeeded.
+                val metadataSaved = cat.saveCache()
+                val result = if (current() && meta.hasDownloadContent && complete && metadataSaved)
+                    ArtistDownloadResult.COMPLETE else ArtistDownloadResult.RETRY
+                log.log("apple-music download assets artist=\"$name\" id=${meta.artistId} result=$result " +
+                    "images=$complete metadataSaved=$metadataSaved refreshPending=${!cat.cachedIsFresh(name, policy, identity, visual)}")
+                PreparedArtistDownload(result, meta.motion?.url)
+            }
+        }
+        return finishArtistDownload(prepared, motionResolution, motionCache::downloadForOffline, ::current).thenApply { result ->
+            log.log("apple-music download artist=\"$name\" result=$result requestedMotionQuality=${motionResolution.label}")
+            result
+        }
+    }
+
+    fun clearAppleMusicCache(): CompletableFuture<Int> {
+        batchDownloads.cancel()
+        motionCache.clear()
+        appleRequests.clear { appleCache.clear(); appleCompletedAt.clear() }
+        directoryAvatars.clear()
+        return appleExecutor.submit {
+            val deleted = catalog?.clear() ?: 0
+            appleRequests.clear { appleCache.clear(); appleCompletedAt.clear() }
+            directoryAvatars.clear()
+            deleted
+        }
     }
 
     private fun readAppleAssets(name: String, identity: ArtistIdentityPolicy, visual: ArtistVisualPolicy?, meta: AmArtist, network: Boolean,
@@ -396,9 +464,11 @@ class ArtworkStore(
 
     fun shutdown() {
         closed = true
+        appleRequests.clear { }
+        batchDownloads.close()
         motionCache.close()
         executor.shutdownNow()
-        appleExecutor.shutdownNow()
+        appleExecutor.close()
         appleLocalExecutor.shutdownNow()
         directoryAvatars.close()
     }

@@ -29,13 +29,15 @@ internal object AppleMusicProfileClient {
                 language: PreferredArtistLanguage = PreferredArtistLanguage.CHINESE,
                 allowOtherLanguages: Boolean = false,
                 storefronts: List<String> = emptyList(),
-                health: ArtistStorefrontHealth = defaultHealth): AmArtistDetails? {
+                health: ArtistStorefrontHealth = defaultHealth,
+                pageLanguageCode: String? = null): AmArtistDetails? {
         if (!artistId.matches(Regex("[0-9]+"))) return null
         val regions = profileStorefronts(storefronts, language)
-        var bearer = bearerFor(artistId, artistPageHtml, log, regions, health) ?: return null
+        val pageLocale = pageLanguageCode ?: language.code
+        var bearer = bearerFor(artistId, artistPageHtml, log, regions, health, pageLocale) ?: return null
         var refreshed = false
         var unavailable = false
-        val details = resolveProfiles(artistId, language, allowOtherLanguages, regions, health) request@{ endpoint ->
+        val details = resolveProfiles(artistId, language, allowOtherLanguages, regions, health, pageLanguageCode) request@{ endpoint ->
             if (unavailable) return@request null
             var response = get(endpoint, bearer.value, log) ?: run {
                 if ("/catalog/us/" in endpoint) health.unavailable("US", regions)
@@ -49,7 +51,7 @@ internal object AppleMusicProfileClient {
                 }
                 rejectBearer(bearer, backoff = false)
                 // A fresh page discovers the current index after a token rotation.
-                val replacement = bearerFor(artistId, null, log, regions, health)
+                val replacement = bearerFor(artistId, null, log, regions, health, pageLocale)
                 if (replacement == null) { unavailable = true; return@request null }
                 bearer = replacement
                 refreshed = true
@@ -75,9 +77,11 @@ internal object AppleMusicProfileClient {
     internal fun resolveProfiles(artistId: String, language: PreferredArtistLanguage,
                                  allowOtherLanguages: Boolean, storefronts: List<String>,
                                  health: ArtistStorefrontHealth = defaultHealth,
+                                 pageLanguageCode: String? = null,
                                  load: (String) -> String?): AmArtistDetails? {
         if (!artistId.matches(Regex("[1-9][0-9]{0,19}"))) return null
-        val locale = if (language == PreferredArtistLanguage.CHINESE) "zh-Hans-CN" else language.code
+        val pageLocale = pageLanguageCode ?: language.code
+        val locale = if (pageLocale == "zh-Hans") "zh-Hans-CN" else pageLocale
         for (storefront in health.attempts(profileStorefronts(storefronts, language))) {
             val region = storefront.lowercase(java.util.Locale.ROOT)
             val endpoint = "https://amp-api.music.apple.com/v1/catalog/$region/artists/$artistId" +
@@ -98,10 +102,18 @@ internal object AppleMusicProfileClient {
             PreferredArtistLanguage.CHINESE -> "CN"
             PreferredArtistLanguage.ENGLISH -> "US"
             PreferredArtistLanguage.JAPANESE -> "JP"
+            PreferredArtistLanguage.TRADITIONAL_CHINESE -> "TW"
+            PreferredArtistLanguage.KOREAN -> "KR"
+            PreferredArtistLanguage.FRENCH -> "FR"
+            PreferredArtistLanguage.GERMAN -> "DE"
+            PreferredArtistLanguage.SPANISH -> "ES"
+            PreferredArtistLanguage.ITALIAN -> "IT"
+            PreferredArtistLanguage.PORTUGUESE -> "BR"
+            PreferredArtistLanguage.DUTCH -> "NL"
         }) else ArtistIdentityPolicy(storefronts = regions.joinToString(",")).storefrontOrder
 
     private fun bearerFor(artistId: String, suppliedHtml: String?, log: PluginLog,
-                          storefronts: List<String>, health: ArtistStorefrontHealth): AppBearer? =
+                          storefronts: List<String>, health: ArtistStorefrontHealth, pageLocale: String): AppBearer? =
         synchronized(tokenLock) {
             val now = System.currentTimeMillis()
             cachedBearer?.takeIf { it.usableUntil > now }?.let { return@synchronized it }
@@ -110,7 +122,7 @@ internal object AppleMusicProfileClient {
             // Back off failed discovery so several artists do not repeatedly download the bundle.
             nextTokenAttemptAt = now + TOKEN_RETRY_MS
             val html = suppliedHtml ?: health.attempts(storefronts).firstNotNullOfOrNull { storefront ->
-                val response = get("$MUSIC_ORIGIN/${storefront.lowercase(java.util.Locale.ROOT)}/artist/$artistId?l=zh-Hans", null, log)
+                val response = get("$MUSIC_ORIGIN/${storefront.lowercase(java.util.Locale.ROOT)}/artist/$artistId?l=$pageLocale", null, log)
                 if (response == null) health.unavailable(storefront, storefronts)
                 response?.takeIf { it.status in 200..299 }?.body
             } ?: return@synchronized null
@@ -190,7 +202,7 @@ internal object AppleMusicProfileClient {
             genres = attributes["genreNames"].jsonArray().filterIsInstance<String>()
                 .mapNotNull { AppleMusicPageParser.localizedGenre(it, language)
                     ?: if (allowOtherLanguages) AppleMusicPageParser.localizedGenre(it, PreferredArtistLanguage.ENGLISH) else null }.distinct(),
-            sourceUrl = sourceUrl ?: "$MUSIC_ORIGIN/${storefront ?: when (language) { PreferredArtistLanguage.CHINESE -> "cn"; PreferredArtistLanguage.ENGLISH -> "us"; PreferredArtistLanguage.JAPANESE -> "jp" }}/artist/$expectedId?l=${language.code}",
+            sourceUrl = sourceUrl ?: "$MUSIC_ORIGIN/${storefront ?: profileStorefronts(emptyList(), language).first().lowercase(java.util.Locale.ROOT)}/artist/$expectedId?l=${language.code}",
             languageCode = language.code,
         ).takeIf { it.hasContent }
     }.getOrNull()
@@ -203,11 +215,7 @@ internal object AppleMusicProfileClient {
         // headers must never be forwarded through a redirect.
         connection.instanceFollowRedirects = bearer == null
         connection.setRequestProperty("User-Agent", USER_AGENT)
-        connection.setRequestProperty("Accept-Language", when {
-            "l=en-US" in url -> "en-US,en;q=0.9"
-            "l=ja-JP" in url -> "ja-JP,ja;q=0.9"
-            else -> "zh-CN,zh;q=0.9"
-        })
+        connection.setRequestProperty("Accept-Language", artistAcceptLanguage(url))
         connection.setRequestProperty("Origin", MUSIC_ORIGIN)
         connection.setRequestProperty("Referer", "$MUSIC_ORIGIN/")
         if (bearer != null) connection.setRequestProperty("Authorization", "Bearer $bearer")

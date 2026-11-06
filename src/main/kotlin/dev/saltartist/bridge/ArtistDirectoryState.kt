@@ -11,6 +11,9 @@ import java.lang.reflect.Modifier
 import java.text.Collator
 import java.util.Locale
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 
 internal data class DirectoryArtist(val name: String, val coverPath: String? = null, val favorite: Boolean = false)
 internal data class DirectoryStats(val tracks: Int = 0, val albums: Int = 0, val added: Long = 0, val coverId: String = "")
@@ -37,6 +40,17 @@ internal class ArtistDirectoryState(private val log: PluginLog) {
             state.value = it
             log.logOnce("directory-020-ready", "directory controls ready artists=${it.size}")
         }.onFailure { reset(); log.logOnce("directory-020-state", "directory kept native UI: ${log.describe(it)}") }
+    }
+
+    suspend fun captureAsync(ready: Any?) {
+        if (ready == null || ready === lastState) return
+        try {
+            val artists = withContext(Dispatchers.Default) { directoryArtistsFromState(ready) }
+            lastState = ready
+            state.value = artists
+            log.logOnce("directory-020-ready", "directory controls ready artists=${artists.size}")
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { reset(); log.logOnce("directory-020-state", "directory kept native UI: ${log.describe(error)}") }
     }
 
     fun reset() { lastState = null; state.value = null }

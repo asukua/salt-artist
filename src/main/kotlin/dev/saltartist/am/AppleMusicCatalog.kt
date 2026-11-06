@@ -35,7 +35,7 @@ class AppleMusicCatalog(
                 AppleMusicCache.decode(line)?.let { (key, artist) ->
                     // Visual records use their own source locale and never become
                     // localized biography records during reload.
-                    if (key.contains("|visual:")) {
+                    if (key.contains("|visual:") || key.contains("|profile:")) {
                         memory[key] = artist
                         return@let
                     }
@@ -58,27 +58,56 @@ class AppleMusicCatalog(
     }
 
     @Synchronized
-    fun saveCache() {
-        val file = metaFile ?: return
-        runCatching {
+    fun saveCache(): Boolean {
+        val file = metaFile ?: return false
+        return runCatching {
             pluginDir?.mkdirs()
             atomicCacheWrite(file, memory.toSortedMap().entries.joinToString("\n", postfix = "\n") {
                 (key, artist) -> AppleMusicCache.encode(key, artist)
             }.toByteArray(Charsets.UTF_8))
-        }.onFailure { log.log("apple-music cache write failed: ${log.describe(it)}") }
+            true
+        }.onFailure { log.log("apple-music cache write failed: ${log.describe(it)}") }.getOrDefault(false)
+    }
+
+    /** Clear metadata and reject responses captured before the explicit reset. */
+    fun clear(): Int {
+        ensureLoaded()
+        var deleted = 0
+        requests.clear {
+            synchronized(this) {
+                memory.clear()
+                avatars.clear()
+                migratedScopes.clear()
+                identities.clear()
+                imageDir?.listFiles()?.filter { it.isFile }?.forEach { if (it.delete()) deleted++ }
+                if (metaFile?.delete() == true) deleted++
+            }
+        }
+        return deleted
+    }
+
+    fun isFresh(artistName: String, policy: ArtistLanguagePolicy, identity: ArtistIdentityPolicy,
+                maxAgeMs: Long = CACHE_TTL_MS, visual: ArtistVisualPolicy? = null): Boolean {
+        val now = System.currentTimeMillis()
+        val before = cachedRecords(artistName, identity)
+        val base = identity.artistCacheKey(artistName)
+        return !identity.rejects(artistName) && (if (policy.storefronts == null) freshRecords(before, policy, now, maxAgeMs)
+            else regionalProfilesFresh(base, policy, now, maxAgeMs)) &&
+            (visual == null || visualIsFresh(base, visual, now, maxAgeMs))
     }
 
     fun cached(artistName: String, policy: ArtistLanguagePolicy = ArtistLanguagePolicy(),
                identity: ArtistIdentityPolicy = STRICT_IDENTITY, visual: ArtistVisualPolicy? = null): AmArtist? {
-        val profile = selectLanguageRecord(cachedRecords(artistName, identity), policy)
+        val before = cachedRecords(artistName, identity)
+        if (identity.rejects(artistName)) return null
+        val profile = if (policy.storefronts == null) selectLanguageRecord(before, policy)
+            else selectRegionalProfile(identity.artistCacheKey(artistName), policy)
         return attachVisual(profile, visual?.let { visualRecord(identity.artistCacheKey(artistName), it) }, visual)
     }
 
     fun cachedIsFresh(artistName: String, policy: ArtistLanguagePolicy, identity: ArtistIdentityPolicy,
                       visual: ArtistVisualPolicy? = null): Boolean {
-        val now = System.currentTimeMillis()
-        return freshRecords(cachedRecords(artistName, identity), policy, now, CACHE_TTL_MS) &&
-            (visual == null || visualIsFresh(identity.artistCacheKey(artistName), visual, now, CACHE_TTL_MS))
+        return isFresh(artistName, policy, identity, CACHE_TTL_MS, visual)
     }
 
     internal fun isVisualFresh(artistName: String, identity: ArtistIdentityPolicy, visual: ArtistVisualPolicy): Boolean =
@@ -87,7 +116,7 @@ class AppleMusicCatalog(
     private fun visualRecord(base: String, visual: ArtistVisualPolicy): AmArtist? = memory[visualKey(base, visual)]
     private fun visualIsFresh(base: String, visual: ArtistVisualPolicy, now: Long, maxAgeMs: Long): Boolean {
         val record = visualRecord(base, visual) ?: return false
-        val profileId = records(base).values.firstOrNull()?.artistId
+        val profileId = allProfiles(base).firstOrNull()?.artistId
         if (profileId != null && profileId != record.artistId) return false
         val checked = record.motionCheckedAt
         return checked > 0 && now >= checked && now - checked < maxAgeMs
@@ -147,7 +176,7 @@ class AppleMusicCatalog(
     private fun freshRecords(before: Map<PreferredArtistLanguage, AmArtist>, policy: ArtistLanguagePolicy, now: Long, maxAgeMs: Long): Boolean {
         val selected = selectLanguageRecord(before, policy)
         val languages = listOf(policy.preferredLanguage) +
-            if (policy.showOtherLanguages) PreferredArtistLanguage.entries.filter { it != policy.preferredLanguage } else emptyList()
+            if (policy.showOtherLanguages) LEGACY_ARTIST_LANGUAGES.filter { it != policy.preferredLanguage } else emptyList()
         return before[policy.preferredLanguage]?.let { AppleMusicCache.isFresh(it, now, maxAgeMs) } == true &&
             ((selected?.details?.biography != null && AppleMusicCache.isFresh(selected, now, maxAgeMs)) ||
                 languages.all { before[it]?.let { item -> AppleMusicCache.isFresh(item, now, maxAgeMs) } == true })
@@ -186,22 +215,39 @@ class AppleMusicCatalog(
 
     internal fun identityChanged(name: String) { requests.invalidate(artistIdentityKey(name)) { } }
 
+    /** Bulk download callers must not classify a transient page/search failure as no artist match. */
+    fun resolveForDownload(artistName: String, policy: ArtistLanguagePolicy = ArtistLanguagePolicy(),
+                           identity: ArtistIdentityPolicy = STRICT_IDENTITY,
+                           visual: ArtistVisualPolicy? = null): DownloadResolution {
+        val artist = resolve(artistName, policy, identity = identity, visual = visual)
+        if (artist != null) return DownloadResolution(artist, DownloadResolutionStatus.FOUND)
+        if (identity.rejects(artistName)) return DownloadResolution(null, DownloadResolutionStatus.NOT_FOUND)
+        val base = identity.artistCacheKey(artistName)
+        if (allProfiles(base).isNotEmpty() || avatars[base]?.metadata != null)
+            return DownloadResolution(null, DownloadResolutionStatus.RETRY)
+        val matching = identities.resolveResult(artistName, identity)
+        val status = if (matching.artistId != null || matching.retryable) DownloadResolutionStatus.RETRY
+            else DownloadResolutionStatus.NOT_FOUND
+        return DownloadResolution(null, status)
+    }
+
     /** Blocking: the caller supplies the worker and includes policy in its own snapshot key. */
     fun resolve(artistName: String, policy: ArtistLanguagePolicy = ArtistLanguagePolicy(),
                 maxAgeMs: Long = CACHE_TTL_MS, identity: ArtistIdentityPolicy = STRICT_IDENTITY,
                 visual: ArtistVisualPolicy? = null): AmArtist? {
         ensureLoaded()
+        if (policy.storefronts != null) return resolveRegional(artistName, policy, maxAgeMs, identity, visual)
         val base = identity.artistCacheKey(artistName)
         val generation = requests.generation(artistIdentityKey(artistName))
         val before = cachedRecords(artistName, identity)
         val previous = selectLanguageRecord(before, policy)
         val now = System.currentTimeMillis()
         val languages = listOf(policy.preferredLanguage) +
-            if (policy.showOtherLanguages) PreferredArtistLanguage.entries.filter { it != policy.preferredLanguage } else emptyList()
+            if (policy.showOtherLanguages) LEGACY_ARTIST_LANGUAGES.filter { it != policy.preferredLanguage } else emptyList()
         if (freshRecords(before, policy, now, maxAgeMs) &&
             (visual == null || visualIsFresh(base, visual, now, maxAgeMs)))
             return attachVisual(previous, visual?.let { visualRecord(base, it) }, visual)
-        val artistId = before.values.firstOrNull()?.artistId ?: avatars[base]?.metadata?.artistId
+        val artistId = allProfiles(base).firstOrNull()?.artistId ?: avatars[base]?.metadata?.artistId
             ?: identities.resolve(artistName, identity) ?: return previous
         for (language in languages) {
             val hit = memory[cacheKey(base, language)]
@@ -221,6 +267,100 @@ class AppleMusicCatalog(
         return attachVisual(selected, visual?.let { visualRecord(base, it) }, visual)
     }
 
+    /** Ordered page attempts are keyed by both country and locale, never by language alone. */
+    private fun resolveRegional(name: String, policy: ArtistLanguagePolicy, maxAgeMs: Long,
+                                identity: ArtistIdentityPolicy, visual: ArtistVisualPolicy?): AmArtist? {
+        val generation = requests.generation(artistIdentityKey(name))
+        cachedRecords(name, identity) // Load/migrate legacy assets without treating them as regional checks.
+        if (identity.rejects(name)) return null
+        val base = identity.artistCacheKey(name)
+        val now = System.currentTimeMillis()
+        val previous = selectRegionalProfile(base, policy)
+        if (regionalProfilesFresh(base, policy, now, maxAgeMs) &&
+            (visual == null || visualIsFresh(base, visual, now, maxAgeMs)))
+            return attachVisual(previous, visual?.let { visualRecord(base, it) }, visual)
+        val artistId = allProfiles(base).firstOrNull()?.artistId ?: avatars[base]?.metadata?.artistId
+            ?: identities.resolve(name, identity) ?: return previous
+        for (locale in policy.regionalAttempts) {
+            val key = regionalKey(base, locale)
+            if (!regionalProfileFresh(memory[key], now, maxAgeMs))
+                loadRegionalProfile(name, base, artistId, locale, now, identity, generation)
+            val current = memory[key]
+            if (regionalBiography(current, locale) != null && regionalProfileFresh(current, now, maxAgeMs)) break
+        }
+        val selected = selectRegionalProfile(base, policy) ?: previous
+        requests.publish(artistIdentityKey(name), generation) {
+            if (selected != null) invalidateChangedImages(name, previous, selected, identity)
+        }
+        if (visual != null && !visualIsFresh(base, visual, now, maxAgeMs))
+            loadVisual(name, base, artistId, visual, now, identity, generation)
+        saveCache()
+        return attachVisual(selected, visual?.let { visualRecord(base, it) }, visual)
+    }
+
+    private fun regionalProfileFresh(record: AmArtist?, now: Long, maxAgeMs: Long): Boolean =
+        record != null && record.detailsFetchedAt > 0L && now >= record.detailsFetchedAt &&
+            now - record.detailsFetchedAt < maxAgeMs
+
+    private fun regionalBiography(record: AmArtist?, locale: ArtistPageLocale): String? {
+        val details = record?.details ?: return null
+        if (details.languageCode != locale.language.code) return null
+        return details.biography?.takeIf { it.isNotBlank() }
+    }
+
+    private fun regionalProfilesFresh(base: String, policy: ArtistLanguagePolicy, now: Long, maxAgeMs: Long): Boolean {
+        for (locale in policy.regionalAttempts) {
+            val record = memory[regionalKey(base, locale)]
+            if (!regionalProfileFresh(record, now, maxAgeMs)) return false
+            if (regionalBiography(record, locale) != null) return true
+        }
+        return true
+    }
+
+    private fun selectRegionalProfile(base: String, policy: ArtistLanguagePolicy): AmArtist? {
+        val candidates = policy.regionalAttempts.mapNotNull { locale -> memory[regionalKey(base, locale)]?.let { locale to it } }
+        candidates.firstOrNull { (locale, record) -> regionalBiography(record, locale) != null }?.let { return it.second }
+        // A native page can itself return an untranslated biography. Keep it only after every
+        // requested native language has been tried; an incidental English CN page must not win.
+        candidates.firstOrNull { (locale, record) -> locale in policy.nativeAttempts && !record.details?.biography.isNullOrBlank() }
+            ?.let { return it.second }
+        val fallback = candidates.firstOrNull { it.second.details?.hasContent == true }?.second ?: candidates.firstOrNull()?.second
+        // Facts remain useful when the requested Chinese biography was absent or in another language.
+        return fallback?.copy(details = fallback.details?.copy(biography = null)?.takeIf { it.hasContent })
+    }
+
+    private fun loadRegionalProfile(name: String, base: String, artistId: String, locale: ArtistPageLocale,
+                                    now: Long, identity: ArtistIdentityPolicy, generation: Long) {
+        val link = "https://music.apple.com/${locale.country.lowercase(java.util.Locale.ROOT)}/artist/$artistId?l=${locale.pageLanguageCode}"
+        val html = httpGet(link)
+        val parsed = html?.let { AppleMusicPageParser.parseHtml(it, artistId, link, now, locale.language, true) }
+        // Keep the existing profile facts path even when the public header has no biography.
+        // Restrict the API request to this one region, so health retries cannot reorder the policy.
+        val loadedProfile = if (profileLoader != null) profileLoader.invoke(artistId, html, log, locale.language)
+            else AppleMusicProfileClient.resolve(artistId, html, log, locale.language, allowOtherLanguages = true,
+                storefronts = listOf(locale.country), health = storefrontHealth, pageLanguageCode = locale.pageLanguageCode)
+        val profile = loadedProfile?.let { facts ->
+            val biography = facts.biography?.let { AppleMusicPageParser.localizedBiography(it, locale.language, true) }
+            val parsedMatches = parsed?.details?.let { it.biography != null && it.languageCode == locale.language.code } == true
+            facts.copy(biography = biography?.takeUnless { parsedMatches && it.second != locale.language }?.first,
+                languageCode = biography?.second?.code ?: facts.languageCode)
+        }
+        if (parsed == null && profile == null) return
+        val key = regionalKey(base, locale)
+        requests.publish(artistIdentityKey(name), generation) {
+            val previous = memory[key]
+            // Preserve offline biographies after a transport/parse failure; do not make them fresh.
+            if (parsed == null && profile?.biography == null && previous != null) return@publish
+            val page = parsed ?: AmArtist(artistId, null, "bb", false, null, "bb", now)
+            val current = mergePages(listOf(page), previous, now, profile)
+            memory[key] = current.copy(detailsFetchedAt = if (parsed != null || profile?.biography != null) now else 0L)
+            log.log("apple-music profile source=${locale.token} biography=${memory[key]?.details?.biography != null}")
+        }
+    }
+
+    private fun allProfiles(base: String): List<AmArtist> = records(base).values.toList() +
+        memory.entries.filter { it.key.startsWith("$base|profile:") }.map { it.value }
+
     /** Compatibility with the former positional maximum-age argument. */
     fun resolve(artistName: String, maxAgeMs: Long, identity: ArtistIdentityPolicy = STRICT_IDENTITY): AmArtist? =
         resolve(artistName, ArtistLanguagePolicy(), maxAgeMs, identity)
@@ -231,10 +371,11 @@ class AppleMusicCatalog(
         var selected: AmArtist? = null
         var selectedCountry: String? = null
         var unavailableBeforeSelection = false
-        for (country in visual.countries) {
-            val link = "https://music.apple.com/${country.lowercase(java.util.Locale.ROOT)}/artist/$artistId?l=${visual.language.code}"
+        for (locale in visual.locales) {
+            val country = locale.country
+            val link = "https://music.apple.com/${country.lowercase(java.util.Locale.ROOT)}/artist/$artistId?l=${locale.pageLanguageCode}"
             val html = httpGet(link)
-            val parsed = html?.let { AppleMusicPageParser.parseHtml(it, artistId, link, now, visual.language, true) }
+            val parsed = html?.let { AppleMusicPageParser.parseHtml(it, artistId, link, now, locale.language, true) }
             if (parsed == null) {
                 // A failed request, an absent page and an invalid response are
                 // indistinguishable here. Keep this choice eligible for retry.
@@ -317,12 +458,14 @@ class AppleMusicCatalog(
         ensureLoaded()
         val base = identity.artistCacheKey(artistName)
         val generation = requests.generation(artistIdentityKey(artistName))
-        cachedRecords(artistName, identity).values.firstNotNullOfOrNull { artist ->
+        cachedRecords(artistName, identity)
+        if (identity.rejects(artistName)) return null
+        allProfiles(base).firstNotNullOfOrNull { artist ->
             artist.avatarTemplate?.let { AvatarMetadata(artist.artistId, it, artist.avatarCrop) }
         }?.let { return it }
         val now = System.currentTimeMillis()
         avatars[base]?.takeIf { now - it.checkedAt < AVATAR_RETRY_MS }?.let { return it.metadata }
-        val id = records(base).values.firstOrNull()?.artistId
+        val id = allProfiles(base).firstOrNull()?.artistId
             ?: identities.resolve(artistName, identity)
         if (id == null) { requests.publish(artistIdentityKey(artistName), generation) { avatars[base] = AvatarHit(null, now) }; return null }
         val metadata = storefrontHealth.attempts(identity.storefrontOrder).firstNotNullOfOrNull { country ->
@@ -385,13 +528,19 @@ class AppleMusicCatalog(
             connection.readTimeout = if (catalogSearch) 6000 else 12000
             connection.instanceFollowRedirects = true
             connection.setRequestProperty("User-Agent", USER_AGENT)
-            connection.setRequestProperty("Accept-Language", when {
-                "l=en-US" in url -> "en-US,en;q=0.9"
-                "l=ja-JP" in url -> "ja-JP,ja;q=0.9"
-                else -> "zh-CN,zh;q=0.9"
-            })
+            connection.setRequestProperty("Accept-Language", artistAcceptLanguage(url))
             try {
-                if (connection.responseCode !in 200..299) return null
+                val status = connection.responseCode
+                if (status !in 200..299) {
+                    log.log("apple-music http unavailable status=$status url=$url")
+                    return null
+                }
+                val expectedId = AppleMusicPageParser.artistIdOf(url)
+                val finalUrl = connection.url.toString()
+                if (expectedId != null && AppleMusicPageParser.artistIdOf(finalUrl) != expectedId) {
+                    log.log("apple-music artist redirect unavailable id=$expectedId requested=$url final=$finalUrl")
+                    return null
+                }
                 connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             } finally { connection.disconnect() }
         }.onFailure {
@@ -403,9 +552,10 @@ class AppleMusicCatalog(
     companion object {
         private val STRICT_IDENTITY = ArtistIdentityPolicy(enabled = false)
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-        private const val CACHE_TTL_MS = 30L * 24 * 60 * 60 * 1000
+        const val CACHE_TTL_MS = 24L * 60 * 60 * 1000
         private const val AVATAR_RETRY_MS = 60_000L
         private fun cacheKey(base: String, language: PreferredArtistLanguage) = "$base|${language.code}"
+        private fun regionalKey(base: String, locale: ArtistPageLocale) = "$base|profile:native-v1:${locale.token}"
         private fun visualKey(base: String, visual: ArtistVisualPolicy) = "$base|visual:${visual.token}"
 
         internal fun selectLanguageRecord(records: Map<PreferredArtistLanguage, AmArtist>, policy: ArtistLanguagePolicy): AmArtist? {
@@ -420,7 +570,7 @@ class AppleMusicCatalog(
                 return artist.copy(details = filtered.takeIf { it.hasContent })
             }
             if (preferred?.details?.biography != null) return allowed(preferred)
-            val others = PreferredArtistLanguage.entries.filter { it != policy.preferredLanguage }.mapNotNull { records[it] }
+            val others = LEGACY_ARTIST_LANGUAGES.filter { it != policy.preferredLanguage }.mapNotNull { records[it] }
             if (policy.showOtherLanguages) others.firstOrNull { it.details?.biography != null }?.let { return it }
             if (preferred?.details?.hasContent == true) return allowed(preferred)
             if (policy.showOtherLanguages) others.firstOrNull { it.details?.hasContent == true }?.let { return it }

@@ -22,6 +22,8 @@ internal class ArtistArtworkRequests {
         clear()
     }
 
+    fun invalidateAll(clear: () -> Unit) = clear(clear)
+
     @Synchronized
     fun publish(artist: String, expectedGeneration: Long, update: () -> Unit): Boolean {
         if (generation(artist) != expectedGeneration) return false

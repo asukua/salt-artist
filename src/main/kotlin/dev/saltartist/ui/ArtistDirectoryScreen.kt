@@ -3,6 +3,7 @@ package dev.saltartist.ui
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -36,6 +38,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,10 +54,23 @@ import dev.saltartist.settings.*
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collectLatest
 
-private val directoryBackground = Color(0xFF202020)
-private val directoryMuted = Color(0xFFAAAAAE)
-private val directoryAccent = Color(0xFFFF586F)
+private val LocalDirectoryPalette = staticCompositionLocalOf { directoryPalette(Color(0xFF202020), true) }
+private val directoryBackground: Color @Composable get() = LocalDirectoryPalette.current.background
+private val directoryForeground: Color @Composable get() = LocalDirectoryPalette.current.foreground
+private val directoryMuted: Color @Composable get() = directoryForeground.copy(alpha = 0.65f)
+private val directoryAccent: Color @Composable get() = LocalDirectoryPalette.current.accent
+private val directoryPanel: Color @Composable get() = LocalDirectoryPalette.current.panel
+private val directorySelection: Color @Composable get() = directoryAccent.copy(alpha = LocalDirectoryPalette.current.selectionTint)
+private val directoryScrollbarStyle: ScrollbarStyle @Composable get() = ScrollbarStyle(
+    26.dp, 5.dp, RoundedCornerShape(3.dp), 150,
+    directoryForeground.copy(alpha = 0.35f), directoryForeground.copy(alpha = 0.65f),
+)
+
+internal fun directoryArtistLabel(name: String, favorite: Boolean): String = if (favorite) "★ $name" else name
 
 /** Collect the host's read-only flow without replacing its ViewModel or writing its state. */
 @Composable
@@ -61,18 +78,34 @@ internal fun ArtistDirectoryHost(deps: ArtistScreenDeps, readyClass: String) {
     DisposableEffect(deps.directory) { onDispose { deps.directory.detach() } }
     val flow = deps.directory.flow ?: return
     LaunchedEffect(flow, readyClass) {
-        flow.collect { nativeState ->
-            if (nativeState?.javaClass?.name == readyClass) deps.directory.capture(nativeState)
+        flow.collectLatest { nativeState ->
+            if (nativeState?.javaClass?.name == readyClass) deps.directory.captureAsync(nativeState)
             else deps.directory.reset()
         }
     }
-    ArtistDirectoryScreen(deps)
+    val theme = remember { ArtistDirectoryThemeBridge() }
+    val local = remember { runCatching { theme.configLocal }.getOrNull() } ?: return
+    val colorsLocal = remember { runCatching { theme.colorsLocal }.getOrNull() } ?: return
+    val current = local.current
+    val colors = colorsLocal.current
+    val hostDark = runCatching { theme.isDark(current) }.getOrNull() ?: return
+    val hostSurface = runCatching { theme.background(colors, hostDark) }.getOrNull() ?: return
+    val preference = deps.settings.read().directoryBackground
+    val custom = preference.mode == DirectoryBackgroundMode.CUSTOM
+    val base = parseBackgroundColor(preference.color) ?: Color(0xFF243448)
+    val image = if (custom && preference.imagePath.isNotBlank()) deps.artwork.localLogo(java.io.File(preference.imagePath)) else null
+    val dark = if (custom) image != null || base.luminance() < 0.179f else hostDark
+    val surface = if (!custom) hostSurface else if (image == null) base else Color(0xFF202020)
+    val config = remember(current, dark, custom) { runCatching { if (custom) theme.configFor(current, dark) else current }.getOrNull() } ?: return
+    CompositionLocalProvider(local provides config, LocalDirectoryPalette provides directoryPalette(surface, dark, image != null)) {
+        ArtistDirectoryScreen(deps, image)
+    }
 }
 
 /** Sibling overlay in the navigation Box, below the host's mini player. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps) {
+internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps, backgroundImage: androidx.compose.ui.graphics.ImageBitmap? = null) {
     val source = deps.directory.artists ?: return // Keep the native loading/error screen.
     val browsing = deps.directoryBrowsing
     if (browsing.nativeInterface) {
@@ -80,7 +113,7 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps) {
             Box(Modifier.padding(top = 10.dp).size(36.dp).clip(RoundedCornerShape(7.dp))
                 .background(directoryBackground).semantics { contentDescription = "返回艺人视图" }
                 .clickable(role = Role.Button) { browsing.nativeInterface = false }, contentAlignment = Alignment.Center) {
-                BackGlyph(Color.White)
+                BackGlyph(directoryForeground)
             }
         }
         return
@@ -88,10 +121,14 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps) {
     val settings = deps.settings.read()
     val prefs = settings.directory
     val tracks = deps.repository.tracks.orEmpty()
-    val stats = remember(tracks) { directoryStatistics(tracks) }
+    val stats by produceState(initialValue = emptyMap<String, DirectoryStats>(), tracks) {
+        value = withContext(Dispatchers.Default) { directoryStatistics(tracks) }
+    }
     val favorites = deps.settings.favorites()
     val navigator = deps.navigation.navigator()
     val query = browsing.query
+    var appearanceOpen by remember { mutableStateOf(false) }
+    var downloadsOpen by remember { mutableStateOf(false) }
     var selecting by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(emptySet<String>()) }
     var confirming by remember { mutableStateOf(false) }
@@ -114,12 +151,22 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps) {
 
     Box(Modifier.fillMaxSize().background(directoryBackground).clickable(indication = null,
         interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) { }) {
+        if (backgroundImage != null) {
+            Image(backgroundImage, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.64f)))
+        }
         Column(Modifier.fillMaxSize().padding(horizontal = 22.dp).padding(top = 16.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SaltText("艺术家", size = 24.sp, weight = FontWeight.Bold, color = Color.White)
+                SaltText("艺术家", size = 24.sp, weight = FontWeight.Bold, color = directoryForeground)
                 SaltText(if (query.isBlank()) "${source.count { !prefs.isHidden(it.name) }} 位艺人" else "${visible.size} 个结果",
                     size = 13.sp, color = directoryMuted)
                 Spacer(Modifier.weight(1f))
+                DirectoryButton("背景") { appearanceOpen = true }
+                val progress = deps.artwork.batchDownloads.progress
+                DirectoryButton(if (progress.running) "下载 ${progress.completed}/${progress.total}" else "一键全部下载") {
+                    if (!progress.running && !deps.preparingDownloads.value) deps.downloadAllArtists()
+                    downloadsOpen = true
+                }
                 DirectorySearch(query, { browsing.query = it }, Modifier.width(280.dp))
                 DirectorySettingsMenu(prefs, ::save,
                     onRemove = { selecting = true; selected = emptySet() },
@@ -153,7 +200,7 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps) {
                                 selecting, artist.name in selected, artist.favorite || deps.settings.isFavorite(artist.name), deps) { activate(artist) }
                         }
                     }
-                    VerticalScrollbar(rememberScrollbarAdapter(grid), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+                    VerticalScrollbar(rememberScrollbarAdapter(grid), Modifier.align(Alignment.CenterEnd).fillMaxHeight(), style = directoryScrollbarStyle)
                 }
               }
             } else {
@@ -176,13 +223,15 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps) {
                                 selecting, artist.name in selected, artist.favorite || deps.settings.isFavorite(artist.name), deps) { activate(artist) }
                         }
                     }
-                    VerticalScrollbar(rememberScrollbarAdapter(list), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+                    VerticalScrollbar(rememberScrollbarAdapter(list), Modifier.align(Alignment.CenterEnd).fillMaxHeight(), style = directoryScrollbarStyle)
                 }
               }
             }
         }
+        if (appearanceOpen) DirectoryBackgroundPanel(deps, directoryForeground, directoryPanel) { appearanceOpen = false }
+        if (downloadsOpen) DirectoryDownloadsPanel(deps, directoryForeground, directoryPanel) { downloadsOpen = false }
         if (confirming) DirectoryDialog("移除 ${selected.size} 位艺人？", { confirming = false }) {
-            SaltText("仅从艺人列表移除，可在「恢复艺人」中恢复。歌曲和磁盘文件会保留。", color = directoryMuted, size = 14.sp, maxLines = 3)
+            SaltText("仅移出列表，可恢复；歌曲和文件保留。", color = directoryMuted, size = 14.sp, maxLines = 3)
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 DirectoryButton("取消") { confirming = false }
@@ -207,11 +256,13 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps) {
                 }
                 LazyColumn(Modifier.heightIn(max = 360.dp).fillMaxWidth().padding(top = 12.dp)) {
                     items(prefs.hidden.toList().sorted(), key = { it }) { name ->
-                        Row(Modifier.fillMaxWidth().semantics { contentDescription = "恢复选择 $name" }.clickable {
+                        Row(Modifier.fillMaxWidth().semantics { contentDescription = "恢复选择 $name"; toggleableState = ToggleableState(name in restoreSelected) }
+                            .clickable(role = Role.Checkbox) {
                             restoreSelected = if (name in restoreSelected) restoreSelected - name else restoreSelected + name
                         }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            SaltText(if (name in restoreSelected) "✓" else "○", Modifier.width(28.dp), color = directoryAccent)
-                            SaltText(name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White)
+                            DirectorySelectionIndicator(name in restoreSelected, Modifier.size(22.dp))
+                            Spacer(Modifier.width(8.dp))
+                            SaltText(name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = directoryForeground)
                             DirectoryButton("恢复") {
                                 if (save { p -> p.copy(hidden = p.hidden - name) }) restoreSelected = restoreSelected - name
                             }
@@ -223,14 +274,45 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps) {
     }
 }
 
+/** Fixed-size geometry keeps selected and unselected controls circular in every font and scale. */
+@Composable
+private fun DirectorySelectionIndicator(selected: Boolean, modifier: Modifier = Modifier) {
+    val colors = LocalDirectoryPalette.current
+    Canvas(modifier) {
+        val radius = size.minDimension / 2f
+        drawCircle(if (selected) colors.accent else colors.panel, radius = radius)
+        if (selected) {
+            val stroke = size.minDimension * 0.095f
+            drawLine(colors.accentContent, Offset(size.width * 0.25f, size.height * 0.51f),
+                Offset(size.width * 0.43f, size.height * 0.68f), stroke, StrokeCap.Round)
+            drawLine(colors.accentContent, Offset(size.width * 0.43f, size.height * 0.68f),
+                Offset(size.width * 0.75f, size.height * 0.33f), stroke, StrokeCap.Round)
+        } else {
+            drawCircle(colors.foreground.copy(alpha = 0.7f), radius = radius - size.minDimension * 0.055f,
+                style = Stroke(width = size.minDimension * 0.08f))
+        }
+    }
+}
+
+@Composable
+private fun DirectoryCheckmark(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val stroke = size.minDimension * 0.10f
+        drawLine(color, Offset(size.width * 0.18f, size.height * 0.51f),
+            Offset(size.width * 0.41f, size.height * 0.73f), stroke, StrokeCap.Round)
+        drawLine(color, Offset(size.width * 0.41f, size.height * 0.73f),
+            Offset(size.width * 0.82f, size.height * 0.28f), stroke, StrokeCap.Round)
+    }
+}
+
 @Composable
 private fun DirectorySearch(query: String, onChange: (String) -> Unit, modifier: Modifier) {
-    Row(modifier.height(36.dp).clip(RoundedCornerShape(7.dp)).background(Color.White.copy(alpha = 0.07f)).padding(horizontal = 10.dp),
+    Row(modifier.height(36.dp).clip(RoundedCornerShape(7.dp)).background(directoryForeground.copy(alpha = 0.07f)).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
         SearchGlyph(directoryMuted)
         Spacer(Modifier.width(8.dp))
         BasicTextField(query, onChange, Modifier.weight(1f).semantics { contentDescription = "搜索艺人" }, singleLine = true,
-            textStyle = TextStyle(fontFamily = hostFontFamily(), color = Color.White, fontSize = 14.sp), cursorBrush = SolidColor(directoryAccent),
+            textStyle = TextStyle(fontFamily = hostFontFamily(), color = directoryForeground, fontSize = 14.sp), cursorBrush = SolidColor(directoryAccent),
             decorationBox = { field -> Box { if (query.isEmpty()) SaltText("在艺人中搜索", size = 14.sp, color = directoryMuted); field() } })
         if (query.isNotEmpty()) SaltText("×", Modifier.padding(start = 8.dp).clickable { onChange("") }, size = 20.sp, color = directoryMuted)
     }
@@ -240,8 +322,8 @@ private fun DirectorySearch(query: String, onChange: (String) -> Unit, modifier:
 private fun DirectoryOption(label: String, selected: Boolean, click: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).semantics { this.selected = selected }
         .clickable(role = Role.Button, onClick = click).padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-        SaltText(label, Modifier.weight(1f), size = 14.sp, color = if (selected) directoryAccent else Color.White)
-        if (selected) SaltText("✓", size = 15.sp, color = directoryAccent)
+        SaltText(label, Modifier.weight(1f), size = 14.sp, color = if (selected) directoryAccent else directoryForeground)
+        if (selected) DirectoryCheckmark(directoryAccent, Modifier.size(16.dp))
     }
 }
 
@@ -255,7 +337,7 @@ private fun DirectoryPortrait(artist: DirectoryArtist, stats: DirectoryStats, de
         deps.artwork.directoryCover(artist.coverPath)
             ?: stats.coverId.takeIf(String::isNotBlank)?.let { deps.artwork.cover(it)?.image }
     }
-    Box(modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.07f)), contentAlignment = Alignment.Center) {
+    Box(modifier.clip(CircleShape).background(directoryForeground.copy(alpha = 0.07f)), contentAlignment = Alignment.Center) {
         if (portrait != null) Image(portrait, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else SaltText(artist.name.take(1), size = 24.sp, color = directoryMuted)
     }
@@ -265,20 +347,20 @@ private fun DirectoryPortrait(artist: DirectoryArtist, stats: DirectoryStats, de
 private fun DirectoryCard(artist: DirectoryArtist, stats: DirectoryStats, prefs: ArtistDirectoryPreferences,
                           selecting: Boolean, selected: Boolean, favorite: Boolean, deps: ArtistScreenDeps, onClick: () -> Unit) {
     BoxWithConstraints(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-        .background(if (selected) directoryAccent.copy(alpha = 0.17f) else Color.Transparent)
-        .semantics { contentDescription = artist.name }.clickable(role = Role.Button, onClick = onClick).padding(8.dp)) {
+        .background(if (selected) directorySelection else Color.Transparent)
+        .semantics { contentDescription = artist.name; if (selecting) toggleableState = ToggleableState(selected) }
+        .clickable(role = if (selecting) Role.Checkbox else Role.Button, onClick = onClick).padding(8.dp)) {
         val diameter = minOf(maxWidth, (148 * prefs.size.scale).dp)
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             DirectoryPortrait(artist, stats, deps, Modifier.size(diameter))
             if (prefs.view != ArtistDirectoryView.PORTRAITS) {
-                SaltText((if (favorite) "★ " else "") + artist.name, Modifier.fillMaxWidth().padding(top = 10.dp),
-                    size = 15.sp, weight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White)
+                SaltText(directoryArtistLabel(artist.name, favorite), Modifier.fillMaxWidth().padding(top = 10.dp),
+                    size = 15.sp, weight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, color = directoryForeground)
                 if (stats.tracks > 0) SaltText("${stats.tracks} 首歌曲 · ${stats.albums} 张专辑", Modifier.fillMaxWidth().padding(top = 3.dp),
                     size = 12.sp, color = directoryMuted, maxLines = 1)
             }
         }
-        if (selecting) SaltText(if (selected) "✓" else "○", Modifier.align(Alignment.TopEnd).clip(CircleShape)
-            .background(directoryBackground).padding(4.dp), color = if (selected) directoryAccent else Color.White, size = 20.sp)
+        if (selecting) DirectorySelectionIndicator(selected, Modifier.align(Alignment.TopEnd).size(26.dp))
     }
 }
 
@@ -287,15 +369,19 @@ private fun DirectoryRow(artist: DirectoryArtist, stats: DirectoryStats, prefs: 
                          selecting: Boolean, selected: Boolean, favorite: Boolean, deps: ArtistScreenDeps, onClick: () -> Unit) {
     val compact = prefs.view == ArtistDirectoryView.COMPACT
     Row(Modifier.fillMaxWidth().height(((if (compact) 38 else 68) * prefs.size.scale).dp.coerceAtLeast(32.dp))
-        .clip(RoundedCornerShape(7.dp)).background(if (selected) directoryAccent.copy(alpha = 0.17f) else Color.Transparent)
-        .clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (selecting) SaltText(if (selected) "✓" else "○", Modifier.width(28.dp), color = directoryAccent)
+        .clip(RoundedCornerShape(7.dp)).background(if (selected) directorySelection else Color.Transparent)
+        .semantics { contentDescription = artist.name; if (selecting) toggleableState = ToggleableState(selected) }
+        .clickable(role = if (selecting) Role.Checkbox else Role.Button, onClick = onClick).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (selecting) {
+            DirectorySelectionIndicator(selected, Modifier.size(22.dp))
+            Spacer(Modifier.width(8.dp))
+        }
         if (!compact) {
             DirectoryPortrait(artist, stats, deps, Modifier.size((46 * prefs.size.scale).dp))
             Spacer(Modifier.width(14.dp))
         }
-        SaltText((if (favorite) "★ " else "") + artist.name, Modifier.weight(1f), size = (if (compact) 14 else 16).sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White)
+        SaltText(directoryArtistLabel(artist.name, favorite), Modifier.weight(1f), size = (if (compact) 14 else 16).sp,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, color = directoryForeground)
         SaltText(if (stats.tracks > 0) "${stats.tracks} / ${stats.albums}" else "—", Modifier.width(110.dp), size = 12.sp, color = directoryMuted)
         SaltText(directoryAddedDate(stats.added), Modifier.width(110.dp), size = 12.sp, color = directoryMuted)
     }
@@ -307,9 +393,9 @@ private fun directoryAddedDate(time: Long): String = if (time <= 0) "—" else r
 
 @Composable
 private fun DirectoryButton(label: String, enabled: Boolean = true, accent: Boolean = false, onClick: () -> Unit) {
-    SaltText(label, Modifier.clip(RoundedCornerShape(7.dp)).background(if (accent) directoryAccent.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.07f))
+    SaltText(label, Modifier.clip(RoundedCornerShape(7.dp)).background(if (accent) directoryAccent.copy(alpha = LocalDirectoryPalette.current.buttonTint) else directoryForeground.copy(alpha = 0.07f))
         .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp),
-        size = 13.sp, color = if (!enabled) directoryMuted.copy(alpha = 0.4f) else if (accent) directoryAccent else Color.White)
+        size = 13.sp, color = if (!enabled) directoryMuted.copy(alpha = 0.4f) else if (accent) directoryAccent else directoryForeground)
 }
 
 @Composable
@@ -322,38 +408,38 @@ private fun DirectorySettingsMenu(prefs: ArtistDirectoryPreferences,
         Row(Modifier.clip(RoundedCornerShape(7.dp)).semantics { contentDescription = "列表选项" }
             .clickable(role = Role.Button) { expanded = !expanded }.padding(horizontal = 8.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SaltText(prefs.sort.label, size = 14.sp, color = Color.White)
+            SaltText(prefs.sort.label, size = 14.sp, color = directoryForeground)
             DirectorySortGlyph()
         }
         if (expanded) Popup(alignment = Alignment.TopEnd, offset = IntOffset(0, menuOffset),
             onDismissRequest = { expanded = false }, properties = PopupProperties(focusable = true)) {
-            Column(Modifier.width(244.dp).heightIn(max = 560.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF323234))
-                .border(0.5.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp)).padding(8.dp)) {
+            Column(Modifier.width(244.dp).heightIn(max = 560.dp).clip(RoundedCornerShape(12.dp)).background(directoryPanel)
+                .border(0.5.dp, directoryForeground.copy(alpha = 0.12f), RoundedCornerShape(12.dp)).padding(8.dp)) {
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
                 DirectoryMenuHeading("排序")
                 ArtistDirectorySort.entries.forEach { sort -> DirectoryOption(sort.label, sort == prefs.sort) { save { it.copy(sort = sort) } } }
                 DirectoryMenuHeading("视图")
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Color.White.copy(alpha = 0.04f)).padding(3.dp)) {
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(directoryForeground.copy(alpha = 0.04f)).padding(3.dp)) {
                     ArtistDirectoryView.entries.forEach { view ->
                         val active = view == prefs.view
-                        Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(6.dp)).background(if (active) Color.White.copy(alpha = 0.1f) else Color.Transparent)
+                        Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(6.dp)).background(if (active) directoryForeground.copy(alpha = 0.1f) else Color.Transparent)
                             .semantics { contentDescription = view.label; selected = active }.clickable(role = Role.Button) { save { it.copy(view = view) } }, contentAlignment = Alignment.Center) {
-                            DirectoryViewGlyph(view, if (active) directoryAccent else Color.White)
+                            DirectoryViewGlyph(view, if (active) directoryAccent else directoryForeground)
                         }
                     }
                 }
                 DirectoryMenuHeading("大小")
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Color.White.copy(alpha = 0.04f)).padding(3.dp)) {
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(directoryForeground.copy(alpha = 0.04f)).padding(3.dp)) {
                     ArtistDirectorySize.entries.forEach { size ->
                         val active = size == prefs.size
-                        Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(6.dp)).background(if (active) Color.White.copy(alpha = 0.1f) else Color.Transparent)
+                        Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(6.dp)).background(if (active) directoryForeground.copy(alpha = 0.1f) else Color.Transparent)
                             .semantics { contentDescription = "大小：${size.label}"; selected = active }.clickable(role = Role.Button) { save { it.copy(size = size) } }, contentAlignment = Alignment.Center) {
-                            SaltText(size.label, size = 14.sp, color = if (active) directoryAccent else Color.White)
+                            SaltText(size.label, size = 14.sp, color = if (active) directoryAccent else directoryForeground)
                         }
                     }
                 }
                 }
-                Spacer(Modifier.padding(vertical = 6.dp).fillMaxWidth().height(0.5.dp).background(Color.White.copy(alpha = 0.12f)))
+                Spacer(Modifier.padding(vertical = 6.dp).fillMaxWidth().height(0.5.dp).background(directoryForeground.copy(alpha = 0.12f)))
                 DirectoryOption("移除", false) { expanded = false; onRemove() }
                 DirectoryOption("恢复 (${prefs.hidden.size})", false) { expanded = false; onRestore() }
                 DirectoryOption("原生界面", false) { expanded = false; onNative() }
@@ -364,11 +450,12 @@ private fun DirectorySettingsMenu(prefs: ArtistDirectoryPreferences,
 
 @Composable
 private fun DirectorySortGlyph() {
+    val foreground = directoryForeground
     Canvas(Modifier.size(17.dp)) {
         for (row in 0..2) {
             val y = size.height * (0.22f + row * 0.28f)
-            drawCircle(Color.White, size.width * 0.045f, Offset(size.width * 0.1f, y))
-            drawLine(Color.White, Offset(size.width * 0.32f, y), Offset(size.width * 0.94f, y), size.width * 0.09f, StrokeCap.Round)
+            drawCircle(foreground, size.width * 0.045f, Offset(size.width * 0.1f, y))
+            drawLine(foreground, Offset(size.width * 0.32f, y), Offset(size.width * 0.94f, y), size.width * 0.09f, StrokeCap.Round)
         }
     }
 }
@@ -400,9 +487,10 @@ private fun DirectoryMenuHeading(label: String) {
 private fun DirectoryDialog(title: String, close: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.65f)).clickable(onClick = close), contentAlignment = Alignment.Center) {
         Column(Modifier.padding(24.dp).widthIn(max = 560.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF303032)).clickable { }.padding(24.dp)) {
+            .background(directoryPanel).border(0.5.dp, directoryForeground.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
+            .clickable { }.padding(24.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                SaltText(title, Modifier.weight(1f), size = 20.sp, weight = FontWeight.Bold, color = Color.White)
+                SaltText(title, Modifier.weight(1f), size = 20.sp, weight = FontWeight.Bold, color = directoryForeground)
                 DirectoryButton("关闭", onClick = close)
             }
             Spacer(Modifier.height(18.dp))

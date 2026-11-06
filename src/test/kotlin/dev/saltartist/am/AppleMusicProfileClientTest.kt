@@ -101,6 +101,28 @@ class AppleMusicProfileClientTest {
         assertTrue(requests[1].contains("/catalog/jp/"))
     }
 
+    @Test fun aNativeRegionalRequestKeepsItsExactLocaleAndDoesNotUseTheDefaultHealthOrder() {
+        val health = ArtistStorefrontHealth { 1L }
+        health.unavailable("US", listOf("US", "JP", "CN"))
+        val requests = arrayListOf<String>()
+        assertNotNull(AppleMusicProfileClient.resolveProfiles("42", PreferredArtistLanguage.ENGLISH, true,
+            listOf("GB"), health, pageLanguageCode = "en-GB") { url ->
+            requests += url
+            "{\"data\":[{\"id\":\"42\",\"type\":\"artists\",\"attributes\":{\"origin\":\"London\"}}]}"
+        })
+        assertEquals(1, requests.size)
+        assertTrue(requests.single().contains("/catalog/gb/artists/42?"))
+        assertTrue(requests.single().contains("&l=en-GB&"))
+        requests.clear()
+        assertNotNull(AppleMusicProfileClient.resolveProfiles("42", PreferredArtistLanguage.CHINESE, true,
+            listOf("US"), health, pageLanguageCode = "zh-Hans") { url ->
+            requests += url
+            "{\"data\":[{\"id\":\"42\",\"type\":\"artists\",\"attributes\":{\"origin\":\"中国台湾\"}}]}"
+        })
+        assertTrue(requests.single().contains("/catalog/us/artists/42?"))
+        assertTrue(requests.single().contains("&l=zh-Hans-CN&"))
+    }
+
     private fun fakeBearer(expirySeconds: Long): String {
         fun encode(value: String) = Base64.getUrlEncoder().withoutPadding().encodeToString(value.toByteArray())
         return "${encode("""{"alg":"ES256","typ":"JWT"}""")}.${encode("""{"exp":$expirySeconds}""")}.fake-signature"

@@ -168,7 +168,7 @@ internal fun ArtistLogoEditor(
                 if (logo != null) Image(logo, "当前艺术字预览", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                 else SaltText(name, size = 29.sp, weight = FontWeight.Bold, color = Color.White, maxLines = 2)
             }
-            SaltText("导入透明背景的 PNG 或 WebP 图片，作为艺人页中央的艺术字。", size = 13.sp,
+            SaltText("透明背景的 PNG 或 WebP 图片", size = 13.sp,
                 color = Color.White.copy(alpha = 0.67f), maxLines = 3, lineHeight = 21.sp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 PanelAction("选择图片", onChoose, Modifier.weight(1f), primary = true)

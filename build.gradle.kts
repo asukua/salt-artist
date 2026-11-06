@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "dev.saltartist"
-version = "0.3.0"
+version = "0.3.1"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_25
@@ -69,4 +69,17 @@ tasks.named<Zip>("plugin") {
     from(zipTree(tasks.jar.flatMap { it.archiveFile })) {
         include("META-INF/MANIFEST.MF")
     }
+}
+
+// The host ships a jlink runtime without jdk.charsets. Exercise the same module
+// boundary as well as the full development JDK, so optional providers cannot
+// silently become required by metadata or cache parsing again.
+tasks.register<Test>("testHostRuntime") {
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    jvmArgs("--limit-modules", "java.base,java.compiler,java.datatransfer,java.xml,java.prefs,java.desktop," +
+        "java.instrument,java.logging,java.management,java.security.sasl,java.naming,java.security.jgss," +
+        "java.transaction.xa,java.sql,jdk.accessibility,jdk.internal.jvmstat,jdk.attach,jdk.crypto.ec," +
+        "jdk.security.auth,jdk.unsupported")
+    systemProperty("saltartist.hostRuntimeTest", "true")
 }

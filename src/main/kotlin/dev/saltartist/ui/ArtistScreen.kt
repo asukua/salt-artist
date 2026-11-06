@@ -102,6 +102,10 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
         deps.repository.ensureLoaded()
         listState.scrollToItem(0)
     }
+    LaunchedEffect(artistName, settings.languagePolicy, settings.identityPolicy.cacheToken, settings.visualPolicy) {
+        deps.artwork.appleArt(artistName, settings.languagePolicy, settings.identityPolicy, settings.visualPolicy,
+            checkForUpdates = true)
+    }
     LaunchedEffect(artistName) {
         while (isActive) {
             currentTrackId = runCatching { WorkshopApi.playback.getCurrentMediaItem()?.id.orEmpty() }.getOrDefault("")
@@ -183,7 +187,8 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(palette.backdropDeep)) {
-        val heroHeight = (maxHeight * 0.72f).coerceIn(410.dp, 570.dp)
+        val heroHeight = if (settings.immersiveHero) (maxHeight * 0.72f).coerceIn(410.dp, 570.dp)
+            else (maxHeight * 0.62f).coerceIn(370.dp, 430.dp)
         val heroPx = with(LocalDensity.current) { heroHeight.toPx() }
         val scroll = remember(listState, heroPx) {
             derivedStateOf {
@@ -205,6 +210,8 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
                     meta = "${model.trackCount} 首歌曲 · ${model.albumCount} 张专辑",
                     palette = palette,
                     artwork = artwork,
+                    portrait = if (customPhoto != null) resolvedArtwork?.image ?: amArt?.avatar
+                        else amArt?.avatar ?: artwork?.image,
                     logo = customLogoBitmap ?: amArt?.logo,
                     scroll = scroll,
                     immersive = settings.immersiveHero,

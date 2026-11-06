@@ -28,7 +28,7 @@ jobs:
 
       - name: Test and package
         shell: pwsh
-        run: .\gradlew.bat --no-daemon test plugin
+        run: .\gradlew.bat --no-daemon test testHostRuntime plugin
 
       - name: Create checksums
         shell: pwsh
@@ -46,4 +46,5 @@ jobs:
             build/libs/*.spmod
             build/libs/*.spmod.sha256
             build/reports/tests/test/
+            build/reports/tests/testHostRuntime/
           if-no-files-found: error

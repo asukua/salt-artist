@@ -17,47 +17,61 @@ data class ArtistSettingsData(
     val immersiveHero: Boolean = true,
     val dimBackdrop: Boolean = true,
     val showTrackNumbers: Boolean = true,
-    val preferredLanguage: PreferredArtistLanguage = PreferredArtistLanguage.CHINESE,
-    val showOtherLanguages: Boolean = true,
+    val preferChineseBiography: Boolean = true,
     val favoritesFirst: Boolean = true,
     val recognizeAliases: Boolean = true,
     val artistIdentityOverrides: String = "",
-    val appleMusicStorefronts: String = ArtistIdentityPolicy.DEFAULT_STOREFRONTS,
+    val storefrontOrder: String = ArtistIdentityPolicy.DEFAULT_STOREFRONTS,
     val animatedHero: Boolean = true,
-    val visualStorefront: String = ArtistVisualPolicy.DEFAULT_STOREFRONTS,
-    val visualLanguage: PreferredArtistLanguage = PreferredArtistLanguage.ENGLISH,
     val scrollHeroBlur: Boolean = true,
     val motionFrameRate: Int = 30,
     val motionResolution: MotionResolution = MotionResolution.FULL_HD,
     val directory: ArtistDirectoryPreferences = ArtistDirectoryPreferences(),
+    val directoryBackground: DirectoryBackground = DirectoryBackground(),
 ) {
     val languagePolicy: ArtistLanguagePolicy
-        get() = ArtistLanguagePolicy(preferredLanguage, showOtherLanguages)
-    val visualPolicy: ArtistVisualPolicy get() = ArtistVisualPolicy(visualStorefront, visualLanguage)
-    val identityPolicy = ArtistIdentityPolicy(recognizeAliases, artistIdentityOverrides, appleMusicStorefronts)
+        get() = ArtistLanguagePolicy(storefronts = storefrontOrder, preferChineseBiography = preferChineseBiography)
+    val visualPolicy: ArtistVisualPolicy get() = ArtistVisualPolicy(storefrontOrder, automaticLanguage = true)
+    val identityPolicy = ArtistIdentityPolicy(recognizeAliases, artistIdentityOverrides, storefrontOrder)
 }
+
+/** New values win. On upgrade, keep a custom hero order ahead of the old lookup order. */
+private fun migratedStorefrontOrder(values: Map<String, Any?>): String {
+    fun normalized(raw: String) = ArtistVisualPolicy(raw).countries.joinToString(",")
+    (values[ArtistSettings.KEY_REGION_ORDER] as? String)?.let { return normalized(it) }
+    val previousHero = (values[ArtistSettings.KEY_VISUAL_STOREFRONT] as? String)?.let(::normalized)
+    val previousLookup = (values[ArtistSettings.KEY_STOREFRONTS] as? String)?.let(::normalized)
+    return previousHero?.takeUnless { it == ArtistVisualPolicy.DEFAULT_STOREFRONTS }
+        ?: previousLookup ?: previousHero ?: ArtistVisualPolicy.DEFAULT_STOREFRONTS
+}
+
+private fun migratedChinesePreference(values: Map<String, Any?>): Boolean =
+    values[ArtistSettings.KEY_PREFER_CHINESE] as? Boolean ?: run {
+        val previous = PreferredArtistLanguage.entries.firstOrNull {
+            it.name == values[ArtistSettings.KEY_LANGUAGE] || it.code == values[ArtistSettings.KEY_LANGUAGE]
+        }
+        previous == null || previous == PreferredArtistLanguage.CHINESE
+    }
 
 /** Pure parsing also covers hand-edited or older preference files. */
 internal fun artistSettingsFromValues(values: Map<String, Any?>): ArtistSettingsData = ArtistSettingsData(
     immersiveHero = values[ArtistSettings.KEY_IMMERSIVE] as? Boolean ?: true,
     dimBackdrop = values[ArtistSettings.KEY_DIM] as? Boolean ?: true,
     showTrackNumbers = values[ArtistSettings.KEY_NUMBERS] as? Boolean ?: true,
-    preferredLanguage = PreferredArtistLanguage.entries.firstOrNull {
-        it.name == values[ArtistSettings.KEY_LANGUAGE] || it.code == values[ArtistSettings.KEY_LANGUAGE]
-    } ?: PreferredArtistLanguage.CHINESE,
-    showOtherLanguages = values[ArtistSettings.KEY_OTHER_LANGUAGES] as? Boolean ?: true,
+    preferChineseBiography = migratedChinesePreference(values),
     favoritesFirst = values[ArtistSettings.KEY_FAVORITES_FIRST] as? Boolean ?: true,
     recognizeAliases = values[ArtistSettings.KEY_ALIASES] as? Boolean ?: true,
     artistIdentityOverrides = values[ArtistSettings.KEY_IDENTITY_OVERRIDES] as? String ?: "",
-    appleMusicStorefronts = values[ArtistSettings.KEY_STOREFRONTS] as? String ?: ArtistIdentityPolicy.DEFAULT_STOREFRONTS,
+    storefrontOrder = migratedStorefrontOrder(values),
     animatedHero = values[ArtistSettings.KEY_ANIMATED_HERO] as? Boolean ?: true,
-    visualStorefront = values[ArtistSettings.KEY_VISUAL_STOREFRONT] as? String ?: ArtistVisualPolicy.DEFAULT_STOREFRONTS,
-    visualLanguage = PreferredArtistLanguage.entries.firstOrNull {
-        it.name == values[ArtistSettings.KEY_VISUAL_LANGUAGE] || it.code == values[ArtistSettings.KEY_VISUAL_LANGUAGE]
-    } ?: PreferredArtistLanguage.ENGLISH,
     scrollHeroBlur = values[ArtistSettings.KEY_SCROLL_BLUR] as? Boolean ?: true,
     motionFrameRate = motionFrameRate(values[ArtistSettings.KEY_MOTION_FPS]),
     motionResolution = motionResolution(values[ArtistSettings.KEY_MOTION_RESOLUTION]),
+    directoryBackground = DirectoryBackground(
+        mode = DirectoryBackgroundMode.entries.firstOrNull { it.name == values[ArtistSettings.KEY_DIRECTORY_BACKGROUND] } ?: DirectoryBackgroundMode.SYSTEM,
+        color = (values[ArtistSettings.KEY_DIRECTORY_COLOR] as? String)?.takeIf { parseBackgroundColor(it) != null } ?: "#243448",
+        imagePath = values[ArtistSettings.KEY_DIRECTORY_IMAGE] as? String ?: "",
+    ),
     directory = ArtistDirectoryPreferences(
         view = ArtistDirectoryView.entries.firstOrNull { it.name == values[ArtistSettings.KEY_DIRECTORY_VIEW] } ?: ArtistDirectoryView.GRID,
         size = ArtistDirectorySize.entries.firstOrNull { it.name == values[ArtistSettings.KEY_DIRECTORY_SIZE] } ?: ArtistDirectorySize.MEDIUM,
@@ -87,6 +101,38 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
     private val lock = Any()
     private val state = mutableStateOf(load())
     private var stamp = fileStamp()
+    init {
+        // Persist the derived values once so the host controls display the same
+        // migrated choices as the plugin. Legacy keys remain available for rollback.
+        val migrationStore = config
+        if (migrationStore != null) {
+            val missingRegions = get<Any?>(KEY_REGION_ORDER, null) == null
+            val missingChinese = get<Any?>(KEY_PREFER_CHINESE, null) == null
+            if (missingRegions || missingChinese) {
+                val saved = runCatching {
+                    if (missingRegions) migrationStore.set(KEY_REGION_ORDER, state.value.options.storefrontOrder)
+                    if (missingChinese) migrationStore.set(KEY_PREFER_CHINESE, state.value.options.preferChineseBiography)
+                    migrationStore.save()
+                }.getOrDefault(false)
+                // If reload is unavailable too, the retained keys still describe
+                // the same derived choices as state; a later explicit save may
+                // persist them without changing any legacy preference.
+                if (!saved) runCatching { migrationStore.reload() }
+                stamp = fileStamp()
+            }
+        }
+        // 0.3.1 previously exposed LIGHT/DARK; migrate those values so the
+        // host's two-option preference control also shows the current choice.
+        val oldMode = get(KEY_DIRECTORY_BACKGROUND, "SYSTEM")
+        if (oldMode == "LIGHT" || oldMode == "DARK") {
+            val saved = runCatching {
+                config?.set(KEY_DIRECTORY_BACKGROUND, "SYSTEM")
+                config?.save() == true
+            }.getOrDefault(false)
+            if (!saved) runCatching { config?.set(KEY_DIRECTORY_BACKGROUND, oldMode) }
+            stamp = fileStamp()
+        }
+    }
     private val watcher = if (config == null) null else Executors.newSingleThreadScheduledExecutor { task ->
         Thread(task, "salt-artist-settings").apply { isDaemon = true }
     }.also { service ->
@@ -119,14 +165,16 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
         val options = artistSettingsFromValues(mapOf(
             KEY_IMMERSIVE to get(KEY_IMMERSIVE, true), KEY_DIM to get(KEY_DIM, true),
             KEY_NUMBERS to get(KEY_NUMBERS, true), KEY_LANGUAGE to get(KEY_LANGUAGE, "CHINESE"),
-            KEY_OTHER_LANGUAGES to get(KEY_OTHER_LANGUAGES, true), KEY_FAVORITES_FIRST to get(KEY_FAVORITES_FIRST, true),
+            KEY_PREFER_CHINESE to get<Any?>(KEY_PREFER_CHINESE, null), KEY_FAVORITES_FIRST to get(KEY_FAVORITES_FIRST, true),
+            KEY_REGION_ORDER to get<Any?>(KEY_REGION_ORDER, null),
             KEY_ALIASES to get(KEY_ALIASES, true), KEY_IDENTITY_OVERRIDES to get(KEY_IDENTITY_OVERRIDES, ""),
             KEY_STOREFRONTS to get(KEY_STOREFRONTS, ArtistIdentityPolicy.DEFAULT_STOREFRONTS),
             KEY_ANIMATED_HERO to get(KEY_ANIMATED_HERO, true),
             KEY_VISUAL_STOREFRONT to get(KEY_VISUAL_STOREFRONT, ArtistVisualPolicy.DEFAULT_STOREFRONTS),
-            KEY_VISUAL_LANGUAGE to get(KEY_VISUAL_LANGUAGE, "ENGLISH"),
             KEY_SCROLL_BLUR to get(KEY_SCROLL_BLUR, true), KEY_MOTION_FPS to storedFps,
             KEY_MOTION_RESOLUTION to get(KEY_MOTION_RESOLUTION, "FULL_HD"),
+            KEY_DIRECTORY_BACKGROUND to get(KEY_DIRECTORY_BACKGROUND, "SYSTEM"),
+            KEY_DIRECTORY_COLOR to get(KEY_DIRECTORY_COLOR, "#243448"), KEY_DIRECTORY_IMAGE to get(KEY_DIRECTORY_IMAGE, ""),
             KEY_DIRECTORY_VIEW to get(KEY_DIRECTORY_VIEW, "GRID"), KEY_DIRECTORY_SIZE to get(KEY_DIRECTORY_SIZE, "MEDIUM"),
             KEY_DIRECTORY_SORT to get(KEY_DIRECTORY_SORT, "NAME"), KEY_HIDDEN_ARTISTS to get(KEY_HIDDEN_ARTISTS, ""),
         ))
@@ -181,6 +229,23 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
         saved
     }
 
+    fun setDirectoryBackground(background: DirectoryBackground): Boolean = synchronized(lock) {
+        val store = config ?: return@synchronized false
+        if (parseBackgroundColor(background.color) == null) return@synchronized false
+        val previous = read().directoryBackground
+        fun write(value: DirectoryBackground) {
+            store.set(KEY_DIRECTORY_BACKGROUND, value.mode.name)
+            store.set(KEY_DIRECTORY_COLOR, value.color)
+            store.set(KEY_DIRECTORY_IMAGE, value.imagePath)
+        }
+        val saved = runCatching { write(background); store.save() }.getOrDefault(false)
+        if (saved) {
+            state.value = state.value.copy(options = read().copy(directoryBackground = background))
+            stamp = fileStamp()
+        } else runCatching { write(previous) }
+        saved
+    }
+
     /** Publish only persisted directory choices; a failed save leaves the active view intact. */
     fun updateDirectory(transform: (ArtistDirectoryPreferences) -> ArtistDirectoryPreferences): Boolean = synchronized(lock) {
         val store = config ?: return@synchronized false
@@ -213,12 +278,17 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
         const val KEY_ALIASES = "recognize_artist_aliases"
         const val KEY_IDENTITY_OVERRIDES = "artist_identity_overrides"
         const val KEY_STOREFRONTS = "apple_music_storefronts"
+        const val KEY_REGION_ORDER = "artist_storefront_order"
+        const val KEY_PREFER_CHINESE = "prefer_simplified_chinese_biography"
         const val KEY_ANIMATED_HERO = "animated_artist_hero"
         const val KEY_VISUAL_STOREFRONT = "artist_visual_storefront"
         const val KEY_VISUAL_LANGUAGE = "artist_visual_language"
         const val KEY_SCROLL_BLUR = "scroll_artist_hero_blur"
         const val KEY_MOTION_FPS = "artist_motion_fps"
         const val KEY_MOTION_RESOLUTION = "artist_motion_resolution"
+        const val KEY_DIRECTORY_BACKGROUND = "directory_background"
+        const val KEY_DIRECTORY_COLOR = "directory_background_color"
+        const val KEY_DIRECTORY_IMAGE = "directory_background_image"
         const val KEY_DIRECTORY_VIEW = "artist_directory_view"
         const val KEY_DIRECTORY_SIZE = "artist_directory_size"
         const val KEY_DIRECTORY_SORT = "artist_directory_sort"

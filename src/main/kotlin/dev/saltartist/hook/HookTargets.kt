@@ -21,6 +21,9 @@ object HookTargets {
     data class DirectoryTargets(
         val screenClass: String,
         val itemClass: String,
+        val scaffoldClass: String = "androidx.compose.ui.\u0396",
+        val scaffoldOptionsClass: String = "androidx.compose.ui.\u0585",
+        val artistRepositoryClass: String = "androidx.compose.ui.\u04F0",
         val viewModelClass: String = "androidx.compose.ui.\u05E1",
         val readyStateClass: String = "androidx.compose.ui.\u04DB\$\u0528",
         val stateFlowMethod: String = "\u052A",
@@ -83,6 +86,9 @@ object HookTargets {
             directory = DirectoryTargets(
                 screenClass = "androidx.compose.ui.\u0998",
                 itemClass = "androidx.compose.ui.\u0769",
+                scaffoldClass = "androidx.compose.ui.\u0E16",
+                scaffoldOptionsClass = "androidx.compose.ui.\u093D",
+                artistRepositoryClass = "androidx.compose.ui.\u10B9",
                 viewModelClass = "androidx.compose.ui.\u05E6",
                 readyStateClass = "androidx.compose.ui.\u0C36\$\u0528",
             ),

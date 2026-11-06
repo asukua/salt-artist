@@ -216,7 +216,7 @@ fun ArtistEditor(
                 }
             }
             SaltText(
-                "添加歌曲（搜索整库，回车无关，输入即过滤）",
+                "从曲库添加歌曲",
                 size = 11.sp,
                 color = Color.White.copy(alpha = 0.55f),
             )

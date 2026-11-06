@@ -5,6 +5,11 @@ import dev.saltartist.settings.*
 import kotlin.test.*
 
 class ArtistDirectoryBrowsingTest {
+    @Test
+    fun favoriteStarUsesTheOriginalPrefixForGridAndListNames() {
+        assertEquals("★ 初音ミク", directoryArtistLabel("初音ミク", true))
+        assertEquals("AC/DC", directoryArtistLabel("AC/DC", false))
+    }
     private val artists = (0..99).map { DirectoryArtist("Artist $it") }
     private val prefs = ArtistDirectoryPreferences()
 

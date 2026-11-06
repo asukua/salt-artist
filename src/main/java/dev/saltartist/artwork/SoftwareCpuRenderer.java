@@ -39,6 +39,11 @@ final class SoftwareCpuRenderer implements AutoCloseable {
             Function set = library.getFunction("mpv_set_option_string");
             for (String[] option : options)
                 check(set.invokeInt(new Object[]{handle, option[0], option[1]}), "option " + option[0]);
+            // libmpv can wait 200 ms for the initial flip before publishing the
+            // display dimensions that our SW target needs. Disable that startup
+            // wait without changing stream quality, decoder threads or frame rate.
+            // Optional: older mpv builds must keep this backend if unsupported.
+            set.invokeInt(new Object[]{handle, "video-latency-hacks", "yes"});
             check(library.getFunction("mpv_initialize").invokeInt(new Object[]{handle}), "initialize");
             try (Memory result = new Memory(8); Memory init = new Memory(32); Memory api = new Memory(3)) {
                 result.clear(); init.clear(); api.setString(0, "sw");

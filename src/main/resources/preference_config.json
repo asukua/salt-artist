@@ -1,56 +1,50 @@
 {
   "configs": [
     {
-      "title": "艺人页面",
+      "title": "艺术家总列表",
+      "config": "artist-page.json",
+      "preferences": [
+        {
+          "key": "directory_background",
+          "type": "list",
+          "title": "列表背景",
+          "summary": "仅应用于艺术家总界面；自定义可在列表顶部的「背景」中选择颜色或图片",
+          "entries": [
+            "跟随椒盐设置",
+            "自定义"
+          ],
+          "entry_values": [
+            "SYSTEM",
+            "CUSTOM"
+          ],
+          "default_value": "SYSTEM"
+        },
+        {
+          "key": "directory_background_color",
+          "type": "edittext",
+          "title": "自定义背景颜色",
+          "summary": "六位十六进制颜色，例如 #243448；选中「自定义」后生效",
+          "default_value": "#243448"
+        },
+        {
+          "key": "favorite_artists_first",
+          "type": "switch",
+          "title": "收藏的艺人优先",
+          "summary": "在艺术家总列表中将收藏的艺人排在前面，组内保留原顺序",
+          "default_value": true
+        }
+      ]
+    },
+    {
+      "title": "艺人页面外观",
       "config": "artist-page.json",
       "preferences": [
         {
           "key": "immersive_hero",
           "type": "switch",
           "title": "沉浸式头图",
-          "summary": "关闭后头图退化为取色渐变，适合低配机器或不喜欢大图的情况",
+          "summary": "关闭后显示圆形艺人头像、取色渐变背景及居中的名称和操作按钮，不播放动态头图",
           "default_value": true
-        },
-        {
-          "key": "animated_artist_hero",
-          "type": "switch",
-          "title": "动态艺人头图",
-          "summary": "使用 CPU 解码帧静音播放；关闭后显示当前静态封面",
-          "default_value": true
-        },
-        {
-          "key": "artist_visual_storefront",
-          "type": "edittext",
-          "title": "艺人头图地区顺序",
-          "summary": "按顺序查找动态头图，如 US,JP,CN；最多 8 个地区。只填一个则不使用其他地区",
-          "default_value": "US,JP,CN"
-        },
-        {
-          "key": "artist_visual_language",
-          "type": "list",
-          "title": "艺人头图页面语言",
-          "summary": "Apple Music 可能按页面语言返回不同头图；此设置不影响艺人简介",
-          "entries": ["英语", "简体中文", "日语"],
-          "entry_values": ["ENGLISH", "CHINESE", "JAPANESE"],
-          "default_value": "ENGLISH"
-        },
-        {
-          "key": "artist_motion_fps",
-          "type": "list",
-          "title": "动态头图目标帧率",
-          "summary": "默认 30 帧，实际取决于片源和电脑性能；卡顿时可降低",
-          "entries": ["24 帧", "30 帧"],
-          "entry_values": ["24", "30"],
-          "default_value": "30"
-        },
-        {
-          "key": "artist_motion_resolution",
-          "type": "list",
-          "title": "动态头图分辨率",
-          "summary": "按片源选择不超过此档位的分辨率；2K / 4K 更耗资源，缺少对应片源时自动使用较低分辨率",
-          "entries": ["1080p", "2K（1440p）", "4K（2160p）"],
-          "entry_values": ["FULL_HD", "QHD", "UHD"],
-          "default_value": "FULL_HD"
         },
         {
           "key": "scroll_artist_hero_blur",
@@ -72,50 +66,51 @@
           "title": "显示曲目序号",
           "summary": "歌曲列表左侧显示序号",
           "default_value": true
-        },
+        }
+      ]
+    },
+    {
+      "title": "动态头图",
+      "config": "artist-page.json",
+      "preferences": [
         {
-          "key": "recognize_artist_aliases",
+          "key": "animated_artist_hero",
           "type": "switch",
-          "title": "识别艺人多语言别名",
-          "summary": "按名称、别名及 Apple Music 搜索结果自动选择头像和资料",
+          "title": "动态艺人头图",
+          "summary": "控制艺人页的动态播放；关闭后显示静态封面，一键下载仍包含可用动态视频",
           "default_value": true
         },
         {
-          "key": "artist_identity_overrides",
-          "type": "edittext",
-          "title": "手动指定 Apple Music 艺人",
-          "summary": "需开启别名识别。格式：艺人名=AM艺人链接或ID；多个用英文分号分隔。例：初音未来=307078957",
-          "default_value": ""
-        },
-        {
-          "key": "apple_music_storefronts",
-          "type": "edittext",
-          "title": "Apple Music 地区重试顺序",
-          "summary": "默认 US,JP,CN；US 请求失败时先试 CN，并暂避失败地区。可用英文逗号自定顺序，留空恢复默认，最多 8 个地区",
-          "default_value": "US,JP,CN"
-        },
-        {
-          "key": "favorite_artists_first",
-          "type": "switch",
-          "title": "收藏的艺人优先",
-          "summary": "在艺术家总列表中将收藏的艺人排在前面，组内保留原顺序",
-          "default_value": true
-        },
-        {
-          "key": "preferred_artist_language",
+          "key": "artist_motion_resolution",
           "type": "list",
-          "title": "艺人资料优先语言",
-          "summary": "优先获取所选语言的艺人简介与基础资料",
-          "entries": ["简体中文", "英语", "日语"],
-          "entry_values": ["CHINESE", "ENGLISH", "JAPANESE"],
-          "default_value": "CHINESE"
+          "title": "动态头图分辨率",
+          "summary": "用于播放和一键下载，选择不超过此档位的分辨率；缺少对应片源时使用较低可用档位，2K / 4K 更耗资源",
+          "entries": [
+            "1080p",
+            "2K（1440p）",
+            "4K（2160p）"
+          ],
+          "entry_values": [
+            "FULL_HD",
+            "QHD",
+            "UHD"
+          ],
+          "default_value": "FULL_HD"
         },
         {
-          "key": "show_other_artist_languages",
-          "type": "switch",
-          "title": "显示非优先语言资料",
-          "summary": "优先语言缺失时显示其他语言；关闭后只显示优先语言，完全无资料时回退曲库信息",
-          "default_value": true
+          "key": "artist_motion_fps",
+          "type": "list",
+          "title": "动态头图目标帧率",
+          "summary": "默认 30 帧，实际取决于片源和电脑性能；卡顿时可降低",
+          "entries": [
+            "24 帧",
+            "30 帧"
+          ],
+          "entry_values": [
+            "24",
+            "30"
+          ],
+          "default_value": "30"
         }
       ]
     },
@@ -133,13 +128,74 @@
       ]
     },
     {
-      "title": "Apple Music 缓存",
+      "title": "Apple Music 地区与简介",
+      "config": "artist-page.json",
+      "preferences": [
+        {
+          "key": "artist_storefront_order",
+          "type": "edittext",
+          "title": "Apple Music 地区顺序",
+          "summary": "头图、简介回退与艺人匹配共用，如 US,JP,CN。常见地区使用当地语言（美国英语、日本日语等），未内置的地区使用英语；最多 8 个地区",
+          "default_value": "US,JP,CN"
+        },
+        {
+          "key": "prefer_simplified_chinese_biography",
+          "type": "switch",
+          "title": "优先简体中文简介",
+          "summary": "开启后先获取简体中文简介，缺失时按上述地区顺序选择；关闭后直接按地区顺序选择，不影响头图",
+          "default_value": true
+        }
+      ]
+    },
+    {
+      "title": "艺人匹配",
+      "config": "artist-page.json",
+      "preferences": [
+        {
+          "key": "recognize_artist_aliases",
+          "type": "switch",
+          "title": "识别艺人多语言别名",
+          "summary": "按名称、别名及 Apple Music 搜索结果自动选择头像和资料",
+          "default_value": true
+        },
+        {
+          "key": "artist_identity_overrides",
+          "type": "edittext",
+          "title": "手动指定 Apple Music 艺人",
+          "summary": "需开启别名识别。格式：艺人名=AM艺人链接或ID；多个用英文分号分隔。例：初音未来=307078957",
+          "default_value": ""
+        }
+      ]
+    },
+    {
+      "title": "下载与缓存",
       "config": "apple-music.json",
       "preferences": [
         {
           "type": "button",
+          "title": "一键下载全部艺人资料",
+          "summary": "后台下载完整曲库的简介、静态头图、头像、艺术字及动态视频；视频按所设分辨率下载，复用已有缓存",
+          "arrow_type": "none",
+          "on_click": "dev.saltartist.SaltArtistPlugin.downloadAllArtistData"
+        },
+        {
+          "type": "button",
+          "title": "查看下载进度",
+          "summary": "查看已缓存和未匹配或暂不可用的数量",
+          "arrow_type": "none",
+          "on_click": "dev.saltartist.SaltArtistPlugin.artistDownloadProgress"
+        },
+        {
+          "type": "button",
+          "title": "取消全部下载",
+          "summary": "等待当前艺人结束后停止，保留已完成的缓存",
+          "arrow_type": "none",
+          "on_click": "dev.saltartist.SaltArtistPlugin.cancelArtistDownloads"
+        },
+        {
+          "type": "button",
           "title": "清除缓存",
-          "summary": "缓存里存着从 Apple Music 抓到的艺人头图与艺术字（默认 30 天过期）。清空后下次打开艺人页会重新下载",
+          "summary": "取消批量任务并清除简介、图片和动态视频缓存；下次打开艺人页会重新下载",
           "arrow_type": "none",
           "on_click": "dev.saltartist.SaltArtistPlugin.clearAppleMusicCache"
         }
