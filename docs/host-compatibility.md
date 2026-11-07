@@ -1,3 +1,15 @@
+# 0.3.4 歌曲界面兼容
+
+本轮在已核实的 1.19.3 profile（艺人目录 screen U+0998）启用原生歌曲列表和右键菜单桥；不根据混淆类仍然存在就向旧宿主或新版本扩展。入口、页面过渡和降级选择的原因见 [0.3.4 设计](artist-design.md#034-歌曲入口动画与原生歌曲交互)。0.3.3 的翻页和独立页历史记录继续保留。
+
+全部歌曲页调用 `androidx.compose.ui.\u05EA.\u037F` 的 `TrackLazyColumn`，输入为 `\u06CB<\u03D3, Track>` 分组，使用 `\u03D3$\u0528` 无分组 key 和宿主默认状态、行配置、菜单选项；宿主列表内部已经处理右键。主页预览及插件降级行调用 `androidx.compose.ui.\u0E09.\u037F(\u05DC, Set<Track>, \u066F, Composer, int, int)`，默认选项掩码为 4；状态 `\u05DC(false)` 的 `\u0528()` 打开、`\u0529()` 关闭。菜单自身使用当前鼠标位置定位，不另建插件菜单遮盖原生弹出层。
+
+原始 `Track` 复用添加时间读取所用的同一次 suspend raw query，并按 ID 保存，刷新和关闭时同步更新。原生列表还检查显示字段与插件 `ArtistTrack` 一致；字段覆盖导致不一致时保留插件表格，避免原生组件显示未经覆盖的值。进入任一原生 composable 前先核验反射签名、7 个 SaltTheme Local、Navigator、Clipboard、ViewModelStoreOwner 与 SavedStateRegistryOwner；不满足时使用插件表格和基础右键，不在原生 composable 已打开组合组后 catch 异常再拼接降级界面。独立歌曲页同步宿主主题，原生文字和页面背景使用一致的深浅色。
+
+原生列表根据输入分组设置播放队列，`Function2<Composer, Integer, Unit>` 是空列表插槽，不是歌曲点击回调。非空搜索使用插件表格，避免搜索结果替代完整艺人播放队列。
+
+已提取的当前宿主 class、菜单契约检查和桌面导航反汇编保存在 `build/reports/song-context-034/`。桌面导航使用刚度 500 的弹簧，具体进入／返回方向见设计记录；原生桌面菜单调用链未证实固定动画参数，因此不额外叠加插件动画。常规验证入口仍为 `test testHostRuntime plugin`，真实 Compose／Skia 场景使用 `verifyArtworkRuntime`，本轮运行报告目录为 `build/reports/artwork-034/`。上述入口和证据范围不代表已经完成实际宿主的菜单动作与主题切换验收。
+
 # 0.3.1 验证增量
 
 0.3.1 以原 0.3.0 源码和安装包作为功能基线，保留原有宿主映射、完整归档相同的兼容回退、字体和独立 CPU 动态头图路径。新增总列表主题与预下载接口由 `scripts/verify-host.py` 复核；安装包基线检查使用 `scripts/verify-baseline.py --settings-revision regional-biography`，仅允许用户指定的五个地区/语言旧设置替换为两个新设置，其余设置合同、原 100 个顶级功能类及 2 个字体资源继续保留。迁移约定见[统一地区与简介偏好](artist-design.md#031-统一地区与简介偏好)。

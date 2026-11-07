@@ -283,6 +283,80 @@ def main():
                                            ("getName", "()Ljava/lang/String;", 0x0001)]),
             ("album-route", ALBUM_ROUTE, [("<init>", "(Ljava/lang/String;Ljava/lang/String;)V", 0x0001)]),
         ]
+        # Native song components are enabled only for the verified 1.19.3
+        # profile. Keep older profiles' existing verification scope unchanged.
+        if report.get("hostVersion") == "1.19.3":
+            ui = "androidx/compose/ui/"
+            composer = "Landroidx/compose/runtime/Composer;"
+            local_descriptor = "Landroidx/compose/runtime/ProvidableCompositionLocal;"
+            native_list = ui + "\u05ea"
+            native_menu = ui + "\u0e09"
+            menu_descriptor = "(L" + ui + "\u05dc;Ljava/util/Set;L" + ui + "\u066f;" + composer + "II)V"
+            list_descriptor = ("(Ljava/util/List;Landroidx/compose/ui/Modifier;L" + ui + "\u049b;ZZZL" + ui + "\u0936;"
+                               "Lkotlin/jvm/functions/Function2;L" + ui + "\u071a;L" + ui + "\u066f;"
+                               "Landroidx/compose/foundation/layout/PaddingValues;" + composer + "III)V")
+            check("song list source marker", b"com.xuncorp.voxzen.ui.screen.track.TrackLazyColumn (TrackLazyColumn.kt:" in
+                  archive.read(native_list + ".class"))
+            check("song menu source marker", b"com.xuncorp.voxzen.ui.screen.track.popupmenu.MultipleTrackPopupMenu (MultipleTrackPopupMenu.kt:" in
+                  archive.read(native_menu + ".class"))
+            check("song list references native menu", any(ref["owner"] == native_menu and ref["name"] == "\u037f" and
+                  ref["descriptor"] == menu_descriptor for ref in read(native_list)["refs"]))
+            check("song no-group key implements track group key", ui + "\u03d3" in read(ui + "\u03d3$\u0528")["interfaces"])
+            theme_types = ["\u02e4", "\u02b4", "\u02b2", "\u02e1", "\u02ee", "\u07f4", "\u093d"]
+            for name in theme_types:
+                check("song theme value class " + "/".join(codepoints(name)), read(ui + name)["name"] == ui + name)
+            report["songNative"] = {"profile": "1.19.3", "list": native_list, "menu": native_menu,
+                                    "themeValueTypes": [ui + name for name in theme_types],
+                                    "scope": "Class bytes and ABI only; live CompositionLocals and menu actions require runtime verification"}
+            contracts += [
+                ("song-native-list", native_list, [("\u037f", list_descriptor, 9)]),
+                ("song-native-group", ui + "\u06cb", [("<init>", "(Ljava/lang/Object;Ljava/util/List;)V", 1)]),
+                ("song-native-no-group", ui + "\u03d3$\u0528", [("\u037f", "L" + ui + "\u03d3$\u0528;", 9)]),
+                ("song-native-list-state", ui + "\u049b", [("<init>", "(L" + ui + "\u019b;)V", 1)]),
+                ("song-native-menu", native_menu, [("\u037f", menu_descriptor, 9)]),
+                ("song-native-menu-state", ui + "\u05dc", [("<init>", "(Z)V", 1), ("\u037f", "()Z", 1),
+                                                           ("\u0528", "()V", 1), ("\u0529", "()V", 1)]),
+                ("song-native-track", "com/xuncorp/voxzen/data/entity/Track",
+                 [(name, "()Ljava/lang/String;", 1) for name in ["getId", "getTitle", "getArtist", "getAlbum", "getAlbumArtist"]] +
+                 [("getDuration", "()J", 1)]),
+                ("song-theme-locals", ui + "\u02b6", [(name, "()" + local_descriptor, 9) for name in
+                    ["\u037f", "\u0528", "\u0529", "\u052a", "\u052b", "\u052c", "\u052d"]]),
+                ("song-view-model-local", ui + "\u052f", [("\u0529", local_descriptor, 2 | 8)]),
+                ("song-saved-state-local", ui + "\u078c", [("\u037f", "()" + local_descriptor, 9)]),
+                ("song-clipboard-local", "androidx/compose/ui/platform/CompositionLocalsKt",
+                 [("getLocalClipboard", "()" + local_descriptor, 9)]),
+                ("song-animation-content", "androidx/compose/animation/AnimatedContentKt", [
+                    ("AnimatedContent", "(Ljava/lang/Object;Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function1;"
+                     "Landroidx/compose/ui/Alignment;Ljava/lang/String;Lkotlin/jvm/functions/Function1;"
+                     "Lkotlin/jvm/functions/Function4;" + composer + "II)V", 9),
+                    ("togetherWith", "(Landroidx/compose/animation/EnterTransition;Landroidx/compose/animation/ExitTransition;)"
+                     "Landroidx/compose/animation/ContentTransform;", 9)]),
+                ("song-animation-visibility", "androidx/compose/animation/AnimatedVisibilityKt", [
+                    ("AnimatedVisibility", "(Landroidx/compose/animation/core/MutableTransitionState;Landroidx/compose/ui/Modifier;"
+                     "Landroidx/compose/animation/EnterTransition;Landroidx/compose/animation/ExitTransition;Ljava/lang/String;"
+                     "Lkotlin/jvm/functions/Function3;" + composer + "II)V", 9)]),
+                ("song-animation-transition-state", "androidx/compose/animation/core/MutableTransitionState", [
+                    ("<init>", "(Ljava/lang/Object;)V", 1), ("setTargetState", "(Ljava/lang/Object;)V", 1)]),
+                ("song-animation-spring", "androidx/compose/animation/core/AnimationSpecKt", [
+                    ("spring$default", "(FFLjava/lang/Object;ILjava/lang/Object;)Landroidx/compose/animation/core/SpringSpec;", 9)]),
+                ("song-animation-transitions", "androidx/compose/animation/EnterExitTransitionKt", [
+                    ("fadeIn$default", "(Landroidx/compose/animation/core/FiniteAnimationSpec;FILjava/lang/Object;)"
+                     "Landroidx/compose/animation/EnterTransition;", 9),
+                    ("fadeOut$default", "(Landroidx/compose/animation/core/FiniteAnimationSpec;FILjava/lang/Object;)"
+                     "Landroidx/compose/animation/ExitTransition;", 9),
+                    ("slideInVertically", "(Landroidx/compose/animation/core/FiniteAnimationSpec;Lkotlin/jvm/functions/Function1;)"
+                     "Landroidx/compose/animation/EnterTransition;", 9),
+                    ("slideOutVertically", "(Landroidx/compose/animation/core/FiniteAnimationSpec;Lkotlin/jvm/functions/Function1;)"
+                     "Landroidx/compose/animation/ExitTransition;", 9)]),
+                ("song-animation-float", "androidx/compose/animation/core/AnimatableKt", [
+                    ("Animatable$default", "(FFILjava/lang/Object;)Landroidx/compose/animation/core/Animatable;", 9)]),
+                ("song-animation-state", "androidx/compose/animation/core/Animatable", [
+                    ("getValue", "()Ljava/lang/Object;", 1),
+                    ("snapTo", "(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", 1),
+                    ("animateTo$default", "(Landroidx/compose/animation/core/Animatable;Ljava/lang/Object;"
+                     "Landroidx/compose/animation/core/AnimationSpec;Ljava/lang/Object;Lkotlin/jvm/functions/Function1;"
+                     "Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;", 9)]),
+            ]
         for label, name, methods in contracts:
             dump(label, name)
             for method, descriptor, flags in methods:

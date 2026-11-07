@@ -8,7 +8,7 @@
           "key": "directory_background",
           "type": "list",
           "title": "列表背景",
-          "summary": "仅应用于艺术家总界面；自定义可在列表顶部的「背景」中选择颜色或图片",
+          "summary": "仅应用于艺术家总列表。选择「自定义」后使用下方设置的颜色或图片",
           "entries": [
             "跟随椒盐设置",
             "自定义"
@@ -23,8 +23,15 @@
           "key": "directory_background_color",
           "type": "edittext",
           "title": "自定义背景颜色",
-          "summary": "六位十六进制颜色，例如 #243448；选中「自定义」后生效",
+          "summary": "选中「自定义」时使用的纯色，填写六位十六进制颜色，如 #243448",
           "default_value": "#243448"
+        },
+        {
+          "key": "directory_background_image",
+          "type": "edittext",
+          "title": "自定义背景图片路径",
+          "summary": "选中「自定义」时使用本地图片。填写图片的完整路径，留空则使用纯色",
+          "default_value": ""
         },
         {
           "key": "favorite_artists_first",

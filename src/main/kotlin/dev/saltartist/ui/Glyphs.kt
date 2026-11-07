@@ -156,6 +156,19 @@ internal fun SearchGlyph(color: Color, box: Dp = 14.dp) {
     }
 }
 
+@Composable
+internal fun DownloadGlyph(color: Color) {
+    Canvas(Modifier.size(16.dp)) {
+        val w = size.width
+        val stroke = w * 0.10f
+        val tip = Offset(w * 0.50f, w * 0.67f)
+        drawLine(color, Offset(w * 0.50f, w * 0.12f), tip, stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.26f, w * 0.43f), tip, stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.74f, w * 0.43f), tip, stroke, StrokeCap.Round)
+        drawLine(color, Offset(w * 0.13f, w * 0.88f), Offset(w * 0.87f, w * 0.88f), stroke, StrokeCap.Round)
+    }
+}
+
 /** 三个点（Apple 的 more 菜单）。 */
 @Composable
 internal fun MoreGlyph(color: Color, box: Dp = 14.dp) {

@@ -12,6 +12,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 
 class HostLibraryQueryTest {
     @Test
@@ -30,6 +31,31 @@ class HostLibraryQueryTest {
         continuation.resume(listOf(HostTrack("resumed", 456L)))
 
         assertEquals(mapOf("resumed" to 456L), future.get(2, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun suspendedSnapshotRetainsHostObjectIdentityForNativeActions() {
+        val library = SuspendedLibrary()
+        val future = queryHostLibraryTracks(library)
+        val continuation = library.request.get(2, TimeUnit.SECONDS)
+        val original = HostTrack("native", 789L)
+        assertFalse(future.isDone)
+
+        continuation.resume(listOf(original))
+
+        val snapshot = future.get(2, TimeUnit.SECONDS)
+        assertSame(original, snapshot.single())
+        assertSame(original, nativeTracksById(snapshot)["native"])
+        assertEquals(mapOf("native" to 789L), libraryAddedTimesFromHostSnapshot(snapshot))
+    }
+
+    @Test
+    fun nativeIdentityIndexIgnoresObjectsWithoutUsableTrackIds() {
+        val valid = HostTrack("valid", 123L)
+        val snapshot = listOf(Any(), HostTrack("", 456L), valid)
+        val indexed = nativeTracksById(snapshot)
+        assertEquals(setOf("valid"), indexed.keys)
+        assertSame(valid, indexed["valid"])
     }
 
     @Test

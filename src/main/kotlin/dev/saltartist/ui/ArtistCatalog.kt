@@ -9,6 +9,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +17,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,20 +30,26 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -56,23 +65,21 @@ import dev.saltartist.data.selectLatestAddedAlbum
 
 internal data class ArtistCatalogPlan(
     val albums: List<ArtistAlbum>, val latest: ArtistAlbum?, val tracks: List<ArtistTrack>,
-    val totalCount: Int, val query: String, val expanded: Boolean,
+    val totalCount: Int, val query: String,
     val sidePadding: Dp, val sideBySide: Boolean, val albumColumns: Int,
     val songs: CatalogSongLayout, val showDuration: Boolean,
 )
 
 @Composable
 internal fun rememberArtistCatalog(model: ArtistPageModel, width: Dp, searchActive: Boolean,
-                                   searchQuery: String, expanded: Boolean): ArtistCatalogPlan {
+                                   searchQuery: String, page: Int): ArtistCatalogPlan {
     val albums = remember(model.albums) {
         model.albums.sortedWith(compareByDescending<ArtistAlbum> { it.year }.thenBy { it.title }.thenBy { it.artist })
     }
     val latest = remember(model.albums) { selectLatestAddedAlbum(model.albums) }
     val query = if (searchActive) searchQuery.trim() else ""
     val tracks = remember(model.tracks, query) {
-        if (query.isBlank()) model.tracks else model.tracks.filter {
-            it.title.contains(query, ignoreCase = true) || it.album.contains(query, ignoreCase = true)
-        }
+        filterArtistSongs(model.tracks, query)
     }
     val padding = if (width < 560.dp) 20.dp else 32.dp
     val innerWidth = (width - padding * 2).coerceAtMost(1280.dp)
@@ -80,8 +87,8 @@ internal fun rememberArtistCatalog(model: ArtistPageModel, width: Dp, searchActi
     val songWidth = innerWidth - if (sideBySide) 300.dp else 0.dp
     val columns = when { songWidth >= 720.dp -> 3; songWidth >= 470.dp -> 2; else -> 1 }
     val albumColumns = when { innerWidth >= 1100.dp -> 6; innerWidth >= 860.dp -> 5; innerWidth >= 620.dp -> 4; else -> 2 }
-    return ArtistCatalogPlan(albums, latest, tracks, model.trackCount, query, expanded, padding, sideBySide,
-        albumColumns, CatalogSongLayout(tracks.size, columns, expanded || query.isNotBlank()), songWidth / columns >= 270.dp)
+    return ArtistCatalogPlan(albums, latest, tracks, model.trackCount, query, padding, sideBySide,
+        albumColumns, CatalogSongLayout(tracks.size, columns, page), songWidth / columns >= 270.dp)
 }
 
 /** Only the fixed-size overview and visible song/album rows are composed. */
@@ -97,14 +104,15 @@ internal fun LazyListScope.artistCatalog(
     onOpenAlbum: (ArtistAlbum) -> Unit,
     onPlayAlbum: (ArtistAlbum) -> Unit,
     onShuffle: () -> Unit,
-    onExpand: () -> Unit,
+    onPageChange: (Int) -> Unit,
+    onShowAll: () -> Unit,
 ) {
     item(key = "catalogue", contentType = "overview") {
         CatalogContainer(plan) {
             Column(Modifier.fillMaxWidth()) {
                 @Composable fun songs(modifier: Modifier) = CatalogSongs(
                     plan, deps, palette, currentTrackId, searchActive, searchQuery,
-                    onExpand, onSearchQueryChange, onPlayTrack, onShuffle, modifier,
+                    onPageChange, onShowAll, onSearchQueryChange, onPlayTrack, onShuffle, modifier,
                 )
                 if (plan.sideBySide) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
@@ -119,17 +127,6 @@ internal fun LazyListScope.artistCatalog(
                     }
                     songs(Modifier.fillMaxWidth())
                 }
-            }
-        }
-    }
-    items(plan.songs.remainingRows, key = { offset ->
-        val row = offset + plan.songs.overviewRows
-        "song:$row:${plan.songs.columns}:${plan.tracks[plan.songs.index(row, 0)!!].id}"
-    }, contentType = { "song-row" }) { offset ->
-        CatalogContainer(plan) {
-            Row(Modifier.fillMaxWidth()) {
-                if (plan.sideBySide) Spacer(Modifier.width(300.dp))
-                CatalogSongRow(plan, offset + plan.songs.overviewRows, deps, palette, currentTrackId, onPlayTrack, Modifier.weight(1f))
             }
         }
     }
@@ -166,25 +163,6 @@ internal fun LazyListScope.artistCatalog(
 private fun CatalogContainer(plan: ArtistCatalogPlan, content: @Composable () -> Unit) {
     Box(Modifier.fillMaxWidth().padding(horizontal = plan.sidePadding), contentAlignment = Alignment.TopCenter) {
         Box(Modifier.widthIn(max = 1280.dp).fillMaxWidth()) { content() }
-    }
-}
-
-@Composable
-private fun CatalogSongRow(plan: ArtistCatalogPlan, row: Int, deps: ArtistScreenDeps, palette: ArtworkPalette,
-                           currentTrackId: String, onPlay: (ArtistTrack) -> Unit, modifier: Modifier) {
-    val compactWidth = (320 * plan.songs.columns + 18 * (plan.songs.columns - 1).coerceAtLeast(0)).dp
-    Box(modifier) {
-        Row(Modifier.widthIn(max = compactWidth).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-            repeat(plan.songs.columns) { column ->
-                Box(Modifier.weight(1f)) {
-                    plan.songs.index(row, column)?.let { index ->
-                        val track = plan.tracks[index]
-                        CatalogTrack(track, deps, palette, currentTrackId.isNotBlank() && track.id == currentTrackId,
-                            plan.songs.divider(row, column), plan.showDuration) { onPlay(track) }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -243,38 +221,41 @@ private fun CatalogSongs(
     currentTrackId: String,
     searchActive: Boolean,
     searchQuery: String,
-    onExpand: () -> Unit,
+    onPageChange: (Int) -> Unit,
+    onShowAll: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onPlayTrack: (ArtistTrack) -> Unit,
     onShuffle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(modifier) {
+    BoxWithConstraints(modifier) {
+        val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
         val tracks = plan.tracks
         val totalCount = plan.totalCount
         val query = plan.query
         val layout = plan.songs
-        val previewCount = layout.maxColumns * 3
-        val showAllMatches = query.isNotBlank()
-        val compactWidth = (320 * layout.columns + 18 * (layout.columns - 1).coerceAtLeast(0)).dp
+        // Query/data/column changes replace the shelf immediately, without replaying a page slide.
+        val motion = remember(tracks, query, layout.maxColumns) { CatalogPageMotion(layout.page) }
+        LaunchedEffect(motion, layout.page) { motion.showPage(layout.page) }
+        // Structural flags belong to this composition. A LaunchedEffect may
+        // update them before drawing; reading them in graphicsLayer would move
+        // the old page before its replacement layers have been composed.
+        val transitioning = motion.isRunning
+        val direction = motion.direction
+        val shownPage = motion.page
         val countText = if (query.isNotBlank()) "${tracks.size}/$totalCount 首" else "$totalCount 首"
         Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().height(24.dp), verticalAlignment = Alignment.CenterVertically) {
-                SaltText("歌曲", size = 16.sp, weight = FontWeight.SemiBold, color = palette.onBackdrop)
-                Spacer(Modifier.width(5.dp))
-                CatalogShuffle(palette, enabled = totalCount > 0, onShuffle = onShuffle)
+                Row(Modifier.pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.Button, onClick = onShowAll),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    SaltText("全部歌曲", size = 16.sp, weight = FontWeight.SemiBold, color = palette.onBackdrop)
+                    Spacer(Modifier.width(3.dp))
+                    ChevronRightGlyph(palette.onBackdrop.copy(alpha = 0.6f), 10.dp)
+                }
                 Spacer(Modifier.width(5.dp))
                 SaltText(countText, size = 11.sp, color = palette.onBackdrop.copy(alpha = 0.58f))
                 Spacer(Modifier.weight(1f))
-                if (tracks.size > previewCount && !showAllMatches) {
-                    SaltText(
-                        if (plan.expanded) "收起" else "显示全部",
-                        size = 11.sp,
-                        color = palette.onBackdrop.copy(alpha = 0.75f),
-                        modifier = Modifier.pointerHoverIcon(PointerIcon.Hand)
-                            .clickable(role = Role.Button, onClick = onExpand).padding(vertical = 4.dp),
-                    )
-                }
+                CatalogShuffle(palette, enabled = totalCount > 0, onShuffle = onShuffle)
             }
             Spacer(Modifier.height(7.dp))
             if (searchActive) {
@@ -289,31 +270,69 @@ private fun CatalogSongs(
                     modifier = Modifier.padding(vertical = 12.dp),
                 )
             } else {
-                Row(
-                    Modifier.widthIn(max = compactWidth).fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                ) {
-                    repeat(layout.columns) { column ->
-                        Column(Modifier.weight(1f)) {
-                            repeat(layout.overviewRows) { row ->
-                                layout.index(row, column)?.let { index ->
-                                    val track = tracks[index]
-                                    CatalogTrack(
-                                        track = track,
-                                        deps = deps,
-                                        palette = palette,
-                                        current = currentTrackId.isNotBlank() && track.id == currentTrackId,
-                                        divider = layout.divider(row, column),
-                                        showDuration = plan.showDuration,
-                                        onPlay = { onPlayTrack(track) },
-                                    )
-                                }
+                Box(Modifier.fillMaxWidth().heightIn(min = if (layout.pageCount > 1) 140.dp else 0.dp)
+                    .semantics { stateDescription = "第 ${shownPage + 1} 页，共 ${layout.pageCount} 页" + if (transitioning) "，切换中" else "" }) {
+                    Box(Modifier.fillMaxWidth().clipToBounds()) {
+                        motion.previousPage?.let { page ->
+                            key("outgoing", page) {
+                                CatalogSongPage(plan, CatalogSongLayout(tracks.size, layout.maxColumns, page), deps,
+                                    palette, currentTrackId, false, onPlayTrack,
+                                    Modifier.graphicsLayer { translationX = -direction * motion.fraction * widthPx }
+                                        .clearAndSetSemantics { })
                             }
                         }
+                        key("current", shownPage) {
+                            CatalogSongPage(plan, CatalogSongLayout(tracks.size, layout.maxColumns, shownPage), deps,
+                                palette, currentTrackId, !transitioning, onPlayTrack,
+                                Modifier.graphicsLayer {
+                                    translationX = if (transitioning) direction * (1f - motion.fraction) * widthPx else 0f
+                                }
+                            )
+                        }
+                    }
+                    val ready = !motion.isRunning && motion.page == layout.page
+                    if (layout.hasPrevious) CatalogPageArrow(false, palette, ready, { onPageChange(layout.page - 1) },
+                        Modifier.align(Alignment.CenterStart).offset(x = (-20).dp))
+                    if (layout.hasNext) CatalogPageArrow(true, palette, ready, { onPageChange(layout.page + 1) },
+                        Modifier.align(Alignment.CenterEnd).offset(x = 20.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CatalogSongPage(plan: ArtistCatalogPlan, layout: CatalogSongLayout, deps: ArtistScreenDeps,
+                            palette: ArtworkPalette, currentTrackId: String, enabled: Boolean,
+                            onPlayTrack: (ArtistTrack) -> Unit, modifier: Modifier) {
+    val compactWidth = (320 * layout.columns + 18 * (layout.columns - 1).coerceAtLeast(0)).dp
+    Row(modifier.widthIn(max = compactWidth).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+        repeat(layout.columns) { column ->
+            Column(Modifier.weight(1f)) {
+                repeat(layout.rows) { row ->
+                    layout.index(row, column)?.let { index ->
+                        val track = plan.tracks[index]
+                        CatalogTrack(track, deps, palette, currentTrackId.isNotBlank() && track.id == currentTrackId,
+                            layout.divider(row, column), plan.showDuration, enabled) { onPlayTrack(track) }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CatalogPageArrow(next: Boolean, palette: ArtworkPalette, enabled: Boolean, onClick: () -> Unit, modifier: Modifier) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(modifier.width(20.dp).height(48.dp).clip(RoundedCornerShape(5.dp))
+        .background(palette.onBackdrop.copy(alpha = if (hovered) 0.10f else 0.035f))
+        .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
+        .semantics { contentDescription = if (next) "下一页歌曲" else "上一页歌曲" }
+        .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center) {
+        if (next) ChevronRightGlyph(palette.onBackdrop.copy(alpha = 0.72f), 13.dp)
+        else BackGlyph(palette.onBackdrop.copy(alpha = 0.72f), 13.dp)
     }
 }
 
@@ -325,6 +344,7 @@ internal fun CatalogTrack(
     current: Boolean,
     divider: Boolean,
     showDuration: Boolean,
+    enabled: Boolean = true,
     onPlay: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -334,44 +354,46 @@ internal fun CatalogTrack(
         hovered -> Color.White.copy(alpha = 0.04f)
         else -> Color.Transparent
     }
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().height(46.dp)
-                .clip(RoundedCornerShape(4.dp)).background(background)
-                .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
-                .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onPlay)
-                .padding(horizontal = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CatalogCover(
-                track.id, deps, palette,
-                Modifier.size(34.dp).then(
-                    if (current) Modifier.border(1.dp, palette.accent.copy(alpha = 0.85f), RoundedCornerShape(3.dp)) else Modifier,
-                ),
-                radius = 3, maxSide = 96,
-            )
-            Spacer(Modifier.width(9.dp))
-            Column(Modifier.weight(1f)) {
-                SaltText(
-                    track.title,
-                    size = 12.sp,
-                    weight = if (current) FontWeight.Medium else FontWeight.Normal,
-                    color = if (current) palette.accent else palette.onBackdrop,
+    TrackContextArea(track, deps, palette, onPlay, enabled) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().height(46.dp)
+                    .clip(RoundedCornerShape(4.dp)).background(background)
+                    .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
+                    .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onPlay)
+                    .padding(horizontal = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CatalogCover(
+                    track.id, deps, palette,
+                    Modifier.size(34.dp).then(
+                        if (current) Modifier.border(1.dp, palette.accent.copy(alpha = 0.85f), RoundedCornerShape(3.dp)) else Modifier,
+                    ),
+                    radius = 3, maxSide = 96,
                 )
-                Spacer(Modifier.height(2.dp))
-                SaltText(
-                    track.album.ifBlank { track.artist },
-                    size = 11.sp,
-                    color = palette.onBackdrop.copy(alpha = 0.62f),
-                )
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    SaltText(
+                        track.title,
+                        size = 12.sp,
+                        weight = if (current) FontWeight.Medium else FontWeight.Normal,
+                        color = if (current) palette.accent else palette.onBackdrop,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    SaltText(
+                        track.album.ifBlank { track.artist },
+                        size = 11.sp,
+                        color = palette.onBackdrop.copy(alpha = 0.62f),
+                    )
+                }
+                if (showDuration) {
+                    Spacer(Modifier.width(7.dp))
+                    SaltText(formatDuration(track.durationMs), size = 10.sp, color = palette.onBackdrop.copy(alpha = 0.48f))
+                }
             }
-            if (showDuration) {
-                Spacer(Modifier.width(7.dp))
-                SaltText(formatDuration(track.durationMs), size = 10.sp, color = palette.onBackdrop.copy(alpha = 0.48f))
+            if (divider) {
+                Box(Modifier.fillMaxWidth().padding(start = 45.dp).height(1.dp).background(Color.White.copy(alpha = 0.07f)))
             }
-        }
-        if (divider) {
-            Box(Modifier.fillMaxWidth().padding(start = 45.dp).height(1.dp).background(Color.White.copy(alpha = 0.07f)))
         }
     }
 }
@@ -477,25 +499,30 @@ private fun CatalogShuffle(palette: ArtworkPalette, enabled: Boolean, onShuffle:
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     Box(
-        Modifier.size(25.dp).clip(CircleShape)
+        Modifier.clip(RoundedCornerShape(4.dp))
             .semantics { contentDescription = "随机播放" }
             .background(Color.White.copy(alpha = if (hovered && enabled) 0.09f else 0f))
             .hoverable(interaction).pointerHoverIcon(if (enabled) PointerIcon.Hand else PointerIcon.Default)
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, enabled = enabled, onClick = onShuffle),
         contentAlignment = Alignment.Center,
     ) {
-        ShuffleGlyph(palette.onBackdrop.copy(alpha = if (enabled) 0.73f else 0.25f), 12.dp)
+        Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            val color = palette.onBackdrop.copy(alpha = if (enabled) 0.75f else 0.25f)
+            ShuffleGlyph(color, 12.dp)
+            Spacer(Modifier.width(5.dp))
+            SaltText("随机播放", size = 11.sp, color = color)
+        }
     }
 }
 
 @Composable
-private fun CatalogSearch(query: String, palette: ArtworkPalette, onQueryChange: (String) -> Unit) {
+internal fun CatalogSearch(query: String, palette: ArtworkPalette, onQueryChange: (String) -> Unit) {
     val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    LaunchedEffect(focusRequester) { focusRequester.requestFocus() }
     Row(
         Modifier.fillMaxWidth().height(33.dp).clip(RoundedCornerShape(5.dp))
-            .background(Color.White.copy(alpha = 0.035f))
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(5.dp))
+            .background(palette.onBackdrop.copy(alpha = 0.035f))
+            .border(1.dp, palette.onBackdrop.copy(alpha = 0.08f), RoundedCornerShape(5.dp))
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

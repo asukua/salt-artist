@@ -3,7 +3,8 @@
 allprojects {
     afterEvaluate {
         extensions.getByName('kotlin').sourceSets.getByName('test').kotlin.srcDir(file('scripts/artwork-validation'))
-        def referenceDir = file('build/reports/artwork-032/reference')
+        def verificationDir = file("build/reports/artwork-${project.version.toString().replace('.', '')}")
+        def referenceDir = new File(verificationDir, 'reference')
         referenceDir.mkdirs()
         def baseline = new ProcessBuilder('git', 'show', '9d4acf0:src/main/kotlin/dev/saltartist/ui/ArtistCatalog.kt')
             .directory(rootDir).start()
@@ -22,10 +23,10 @@ allprojects {
             filter.includeTestsMatching('dev.saltartist.ui.ArtistArtworkRuntimeTest')
             systemProperty 'java.awt.headless', 'true'
             jvmArgs '--enable-native-access=ALL-UNNAMED'
-            systemProperty 'artwork.verification.dir', file('build/reports/artwork-032').absolutePath
+            systemProperty 'artwork.verification.dir', verificationDir.absolutePath
             maxHeapSize = '512m'
-            reports.junitXml.outputLocation = file('build/reports/artwork-032/junit')
-            reports.html.outputLocation = file('build/reports/artwork-032/tests')
+            reports.junitXml.outputLocation = new File(verificationDir, 'junit')
+            reports.html.outputLocation = new File(verificationDir, 'tests')
             testLogging { events 'passed', 'failed'; showStandardStreams = true }
         }
     }

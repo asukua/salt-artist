@@ -86,13 +86,18 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
     val logoFile = remember(artistName, revision) { deps.profiles.logoPath(artistName) }
     val customLogoBitmap = deps.artwork.localLogo(logoFile)
     val listState = rememberLazyListState()
+    val allSongsListState = rememberLazyListState()
+    val allSongsProgress = remember { mutableStateOf(1f) }
     val scope = rememberCoroutineScope()
     val catalogTopInsetPx = with(LocalDensity.current) { 64.dp.roundToPx() }
     val navigator = deps.navigation.navigator()
     val isFavorite = deps.settings.isFavorite(artistName)
     var searchActive by remember(artistName) { mutableStateOf(false) }
     var searchQuery by remember(artistName) { mutableStateOf("") }
-    var catalogExpanded by remember(artistName) { mutableStateOf(false) }
+    var catalogPage by remember(artistName) { mutableStateOf(0) }
+    var allSongsOpen by remember(artistName) { mutableStateOf(false) }
+    var allSongsSearchActive by remember(artistName) { mutableStateOf(false) }
+    var allSongsSearchQuery by remember(artistName) { mutableStateOf("") }
     var editorOpen by remember(artistName) { mutableStateOf(false) }
     var infoOpen by remember(artistName) { mutableStateOf(false) }
     var logoEditorOpen by remember(artistName) { mutableStateOf(false) }
@@ -181,14 +186,21 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
         deps.log.log("refresh hero: apple music cache cleared for $artistName")
     }
     fun toggleSearch() {
+        if (allSongsOpen) {
+            allSongsSearchActive = !allSongsSearchActive
+            if (!allSongsSearchActive) allSongsSearchQuery = ""
+            return
+        }
         searchActive = !searchActive
-        if (!searchActive) searchQuery = ""
+        if (!searchActive) { searchQuery = ""; catalogPage = 0 }
         else scope.launch { listState.animateScrollToItem(1, scrollOffset = -catalogTopInsetPx) }
         deps.log.log("search toggled active=$searchActive")
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(palette.backdropDeep)) {
-        val catalog = rememberArtistCatalog(model, maxWidth, searchActive, searchQuery, catalogExpanded)
+    val nativePalette = hostSongPalette(palette)
+    val screenPalette = if (allSongsOpen) nativePalette else palette
+    BoxWithConstraints(Modifier.fillMaxSize().background(screenPalette.backdropDeep)) {
+        val catalog = rememberArtistCatalog(model, maxWidth, searchActive, searchQuery, catalogPage)
         val heroHeight = if (settings.immersiveHero) (maxHeight * 0.72f).coerceIn(410.dp, 570.dp)
             else (maxHeight * 0.62f).coerceIn(370.dp, 430.dp)
         val heroPx = with(LocalDensity.current) { heroHeight.toPx() }
@@ -201,62 +213,75 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
         val collapse = remember(scroll, heroPx) {
             derivedStateOf { (scroll.value / heroPx).coerceIn(0f, 1f) }
         }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 108.dp),
-        ) {
-            item(key = "hero") {
-                ArtistHero(
-                    name = model.name,
-                    meta = "${model.trackCount} 首歌曲 · ${model.albumCount} 张专辑",
+        ArtistPageTransition(allSongsOpen) { showAllSongs ->
+            if (showAllSongs) {
+                ArtistAllSongsScreen(model, deps, nativePalette, currentTrackId, allSongsSearchQuery,
+                    onQueryChange = { allSongsSearchQuery = it },
+                    onPlayTrack = { track -> playAt(model.tracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0)) },
+                    searchActive = allSongsSearchActive, listState = allSongsListState)
+            } else LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize().background(palette.backdropDeep),
+                contentPadding = PaddingValues(bottom = 108.dp),
+            ) {
+                item(key = "hero") {
+                    ArtistHero(
+                        name = model.name,
+                        meta = "${model.trackCount} 首歌曲 · ${model.albumCount} 张专辑",
+                        palette = palette,
+                        artwork = artwork,
+                        portrait = if (customPhoto != null) resolvedArtwork?.image ?: amArt?.avatar
+                            else amArt?.avatar ?: artwork?.image,
+                        logo = customLogoBitmap ?: amArt?.logo,
+                        scroll = scroll,
+                        immersive = settings.immersiveHero,
+                        scrollBlur = settings.scrollHeroBlur,
+                        height = heroHeight,
+                        isFavorite = isFavorite,
+                        enabled = model.tracks.isNotEmpty(),
+                        onInfo = { infoOpen = true },
+                        onPlay = { playAt(0) },
+                        onToggleFavorite = ::toggleFavorite,
+                        motionContent = motion?.let { clip ->
+                            { modifier, blur -> ArtistMotionSurface(clip.url, modifier, deps.log,
+                                frameRate = settings.motionFrameRate, blurProgress = blur,
+                                resolution = settings.motionResolution, cache = deps.artwork.motionCache) }
+                        },
+                    )
+                }
+                artistCatalog(
+                    plan = catalog,
+                    deps = deps,
                     palette = palette,
-                    artwork = artwork,
-                    portrait = if (customPhoto != null) resolvedArtwork?.image ?: amArt?.avatar
-                        else amArt?.avatar ?: artwork?.image,
-                    logo = customLogoBitmap ?: amArt?.logo,
-                    scroll = scroll,
-                    immersive = settings.immersiveHero,
-                    scrollBlur = settings.scrollHeroBlur,
-                    height = heroHeight,
-                    isFavorite = isFavorite,
-                    enabled = model.tracks.isNotEmpty(),
-                    onInfo = { infoOpen = true },
-                    onPlay = { playAt(0) },
-                    onToggleFavorite = ::toggleFavorite,
-                    motionContent = motion?.let { clip ->
-                        { modifier, blur -> ArtistMotionSurface(clip.url, modifier, deps.log,
-                            frameRate = settings.motionFrameRate, blurProgress = blur,
-                            resolution = settings.motionResolution, cache = deps.artwork.motionCache) }
+                    currentTrackId = currentTrackId,
+                    searchActive = searchActive,
+                    searchQuery = searchQuery,
+                    onSearchQueryChange = { searchQuery = it; catalogPage = 0 },
+                    onPlayTrack = { track: ArtistTrack ->
+                        val index = model.tracks.indexOfFirst { it.id == track.id }
+                        playAt(index.coerceAtLeast(0))
+                    },
+                    onOpenAlbum = { openAlbum(it) },
+                    onPlayAlbum = ::playAlbum,
+                    onShuffle = ::shuffle,
+                    onPageChange = { catalogPage = it },
+                    onShowAll = {
+                        allSongsSearchActive = false
+                        allSongsSearchQuery = ""
+                        allSongsOpen = true
                     },
                 )
             }
-            artistCatalog(
-                plan = catalog,
-                deps = deps,
-                palette = palette,
-                currentTrackId = currentTrackId,
-                searchActive = searchActive,
-                searchQuery = searchQuery,
-                onSearchQueryChange = { searchQuery = it },
-                onPlayTrack = { track: ArtistTrack ->
-                    val index = model.tracks.indexOfFirst { it.id == track.id }
-                    playAt(index.coerceAtLeast(0))
-                },
-                onOpenAlbum = { openAlbum(it) },
-                onPlayAlbum = ::playAlbum,
-                onShuffle = ::shuffle,
-                onExpand = { catalogExpanded = !catalogExpanded },
-            )
         }
         ArtistToolbar(
             title = model.name,
-            progress = collapse,
-            isScrolling = listState.isScrollInProgress,
-            palette = palette,
-            searchActive = searchActive,
+            progress = if (allSongsOpen) allSongsProgress else collapse,
+            isScrolling = if (allSongsOpen) allSongsListState.isScrollInProgress else listState.isScrollInProgress,
+            palette = screenPalette,
+            searchActive = if (allSongsOpen) allSongsSearchActive else searchActive,
             onBack = {
-                if (!deps.navigation.back(navigator)) deps.log.log("navigator.back unavailable")
+                if (allSongsOpen) allSongsOpen = false
+                else if (!deps.navigation.back(navigator)) deps.log.log("navigator.back unavailable")
             },
             onShare = ::share,
             onInfo = { infoOpen = true },
@@ -271,26 +296,32 @@ fun ArtistScreen(artistName: String, deps: ArtistScreenDeps) {
             onCustomLogo = { logoEditorOpen = true },
             onMatchArtist = { matcherOpen = true },
         )
-        if (matcherOpen) ArtistMatcher(artistName, palette, deps,
-            onClose = { matcherOpen = false },
-            onChanged = {
-                deps.artwork.identityChanged(artistName)
-                deps.profiles.revision.value++
-                matcherOpen = false
-                toast("已更新 Apple Music 匹配")
-            },
-        )
-        if (infoOpen) ArtistInfo(model, palette, amArt?.avatar, amArt?.details) { infoOpen = false }
-        if (logoEditorOpen) ArtistLogoEditor(
-            name = model.name,
-            logo = customLogoBitmap ?: amArt?.logo,
-            isCustom = deps.profiles.hasCustomLogo(artistName),
-            palette = palette,
-            onChoose = ::chooseCustomLogo,
-            onReset = { deps.profiles.setLogo(artistName, null); toast("已恢复默认艺术字") },
-            onClose = { logoEditorOpen = false },
-        )
-        if (editorOpen) {
+        ArtistOverlayTransition(matcherOpen) {
+            ArtistMatcher(artistName, palette, deps,
+                onClose = { matcherOpen = false },
+                onChanged = {
+                    deps.artwork.identityChanged(artistName)
+                    deps.profiles.revision.value++
+                    matcherOpen = false
+                    toast("已更新 Apple Music 匹配")
+                },
+            )
+        }
+        ArtistOverlayTransition(infoOpen) {
+            ArtistInfo(model, palette, amArt?.avatar, amArt?.details) { infoOpen = false }
+        }
+        ArtistOverlayTransition(logoEditorOpen) {
+            ArtistLogoEditor(
+                name = model.name,
+                logo = customLogoBitmap ?: amArt?.logo,
+                isCustom = deps.profiles.hasCustomLogo(artistName),
+                palette = palette,
+                onChoose = ::chooseCustomLogo,
+                onReset = { deps.profiles.setLogo(artistName, null); toast("已恢复默认艺术字") },
+                onClose = { logoEditorOpen = false },
+            )
+        }
+        ArtistOverlayTransition(editorOpen) {
             // Persist edits against the original route name, even after a display-name change.
             ArtistEditor(rawModel, palette, deps.profiles, deps.repository.allTracks) {
                 editorOpen = false
@@ -317,6 +348,7 @@ private fun ArtistToolbar(
     onCustomLogo: () -> Unit,
     onMatchArtist: () -> Unit,
 ) {
+    val foreground = palette.onBackdrop
     var menuOpen by remember(title) { mutableStateOf(false) }
     LaunchedEffect(isScrolling) { if (isScrolling) menuOpen = false }
     Box(
@@ -332,20 +364,20 @@ private fun ArtistToolbar(
         }.padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            ToolbarButton("返回", onBack) { BackGlyph(Color.White, 15.dp) }
+            ToolbarButton("返回", onBack, foreground = foreground) { BackGlyph(foreground, 15.dp) }
             Spacer(Modifier.width(14.dp))
             SaltText(
-                title, size = 14.sp, weight = FontWeight.SemiBold, color = Color.White,
+                title, size = 14.sp, weight = FontWeight.SemiBold, color = foreground,
                 modifier = Modifier.weight(1f).graphicsLayer {
                     alpha = ((progress.value - 0.28f) / 0.30f).coerceIn(0f, 1f)
                 },
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.width(12.dp))
-            ToolbarButton("搜索歌曲", onSearch, selected = searchActive) { SearchGlyph(Color.White, 16.dp) }
+            ToolbarButton("搜索歌曲", onSearch, selected = searchActive, foreground = foreground) { SearchGlyph(foreground, 16.dp) }
             Spacer(Modifier.width(8.dp))
-            ToolbarButton("更多艺人操作", { menuOpen = !menuOpen }, selected = menuOpen) {
-                MoreGlyph(Color.White, 17.dp)
+            ToolbarButton("更多艺人操作", { menuOpen = !menuOpen }, selected = menuOpen, foreground = foreground) {
+                MoreGlyph(foreground, 17.dp)
             }
         }
         if (menuOpen) {
@@ -359,7 +391,7 @@ private fun ArtistToolbar(
                 Column(
                     Modifier.width(206.dp).clip(RoundedCornerShape(13.dp))
                         .background(palette.backdropDeep.copy(alpha = 0.98f))
-                        .border(0.5.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(13.dp))
+                        .border(0.5.dp, foreground.copy(alpha = 0.16f), RoundedCornerShape(13.dp))
                         .padding(vertical = 6.dp),
                 ) {
                     val entries = listOf(
@@ -373,7 +405,7 @@ private fun ArtistToolbar(
                         "自定义艺术字" to onCustomLogo,
                     )
                     entries.forEachIndexed { index, (label, action) ->
-                        if (index == 3) Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp).height(0.5.dp).background(Color.White.copy(alpha = 0.10f)))
+                        if (index == 3) Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp).height(0.5.dp).background(foreground.copy(alpha = 0.10f)))
                         Box(
                             Modifier.fillMaxWidth().height(35.dp).clickable {
                                 menuOpen = false
@@ -382,16 +414,16 @@ private fun ArtistToolbar(
                             contentAlignment = Alignment.CenterStart,
                         ) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                SaltText(label, size = 12.sp, color = Color.White.copy(alpha = 0.94f), modifier = Modifier.weight(1f))
+                                SaltText(label, size = 12.sp, color = foreground.copy(alpha = 0.94f), modifier = Modifier.weight(1f))
                                 when (index) {
-                                    0 -> InfoGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    1 -> CopyGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    2 -> ShuffleGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    3 -> SearchGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    4 -> EditGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    5 -> PhotoGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    6 -> RefreshGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
-                                    7 -> LetterGlyph(Color.White.copy(alpha = 0.7f), 14.dp)
+                                    0 -> InfoGlyph(foreground.copy(alpha = 0.7f), 14.dp)
+                                    1 -> CopyGlyph(foreground.copy(alpha = 0.7f), 14.dp)
+                                    2 -> ShuffleGlyph(foreground.copy(alpha = 0.7f), 14.dp)
+                                    3 -> SearchGlyph(foreground.copy(alpha = 0.7f), 14.dp)
+                                    4 -> EditGlyph(foreground.copy(alpha = 0.7f), 14.dp)
+                                    5 -> PhotoGlyph(foreground.copy(alpha = 0.7f), 14.dp)
+                                    6 -> RefreshGlyph(foreground.copy(alpha = 0.7f), 14.dp)
+                                    7 -> LetterGlyph(foreground.copy(alpha = 0.7f), 14.dp)
                                 }
                             }
                         }
@@ -407,12 +439,13 @@ private fun ToolbarButton(
     label: String,
     onClick: () -> Unit,
     selected: Boolean = false,
+    foreground: Color = Color.White,
     content: @Composable () -> Unit,
 ) {
     Box(
         Modifier.size(34.dp).clip(CircleShape)
-            .background(if (selected) Color.White.copy(alpha = 0.22f) else Color.Black.copy(alpha = 0.24f))
-            .border(0.5.dp, Color.White.copy(alpha = if (selected) 0.38f else 0.16f), CircleShape)
+            .background(if (selected) foreground.copy(alpha = 0.22f) else Color.Black.copy(alpha = 0.24f))
+            .border(0.5.dp, foreground.copy(alpha = if (selected) 0.38f else 0.16f), CircleShape)
             .semantics { contentDescription = label }
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,

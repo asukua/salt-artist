@@ -38,6 +38,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.TextStyle
@@ -127,11 +128,11 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps, backgroundImage: andr
     val favorites = deps.settings.favorites()
     val navigator = deps.navigation.navigator()
     val query = browsing.query
-    var appearanceOpen by remember { mutableStateOf(false) }
     var downloadsOpen by remember { mutableStateOf(false) }
     var selecting by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(emptySet<String>()) }
     var confirming by remember { mutableStateOf(false) }
+    var removalCount by remember { mutableStateOf(0) }
     var restoring by remember { mutableStateOf(false) }
     var restoreSelected by remember { mutableStateOf(emptySet<String>()) }
     var message by remember { mutableStateOf("") }
@@ -161,11 +162,24 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps, backgroundImage: andr
                 SaltText(if (query.isBlank()) "${source.count { !prefs.isHidden(it.name) }} 位艺人" else "${visible.size} 个结果",
                     size = 13.sp, color = directoryMuted)
                 Spacer(Modifier.weight(1f))
-                DirectoryButton("背景") { appearanceOpen = true }
                 val progress = deps.artwork.batchDownloads.progress
-                DirectoryButton(if (progress.running) "下载 ${progress.completed}/${progress.total}" else "一键全部下载") {
-                    if (!progress.running && !deps.preparingDownloads.value) deps.downloadAllArtists()
-                    downloadsOpen = true
+                val preparing = deps.preparingDownloads.value
+                val downloading = progress.running || preparing
+                Box(
+                    Modifier.size(36.dp).clip(RoundedCornerShape(7.dp))
+                        .background(directoryForeground.copy(alpha = 0.07f))
+                        .semantics {
+                            contentDescription = "一键全部下载"
+                            if (preparing) stateDescription = "正在准备下载"
+                            else if (progress.running) stateDescription = "已下载 ${progress.completed}/${progress.total}"
+                        }
+                        .clickable(role = Role.Button) {
+                            if (!downloading) deps.downloadAllArtists()
+                            downloadsOpen = true
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    DownloadGlyph(if (downloading) directoryAccent else directoryForeground)
                 }
                 DirectorySearch(query, { browsing.query = it }, Modifier.width(280.dp))
                 DirectorySettingsMenu(prefs, ::save,
@@ -177,7 +191,10 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps, backgroundImage: andr
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     DirectoryButton("取消选择") { selecting = false; selected = emptySet() }
                     DirectoryButton("全选结果") { selected = visible.mapTo(linkedSetOf()) { it.name } }
-                    DirectoryButton("移除 (${selected.size})", enabled = selected.isNotEmpty(), accent = true) { confirming = true }
+                    DirectoryButton("移除 (${selected.size})", enabled = selected.isNotEmpty(), accent = true) {
+                        removalCount = selected.size
+                        confirming = true
+                    }
             }
             if (message.isNotEmpty()) SaltText(message, Modifier.padding(top = 8.dp), size = 13.sp, color = directoryAccent)
             Spacer(Modifier.height(12.dp))
@@ -228,43 +245,48 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps, backgroundImage: andr
               }
             }
         }
-        if (appearanceOpen) DirectoryBackgroundPanel(deps, directoryForeground, directoryPanel) { appearanceOpen = false }
-        if (downloadsOpen) DirectoryDownloadsPanel(deps, directoryForeground, directoryPanel) { downloadsOpen = false }
-        if (confirming) DirectoryDialog("移除 ${selected.size} 位艺人？", { confirming = false }) {
-            SaltText("仅移出列表，可恢复；歌曲和文件保留。", color = directoryMuted, size = 14.sp, maxLines = 3)
-            Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                DirectoryButton("取消") { confirming = false }
-                DirectoryButton("确认移除", accent = true) {
-                    if (save { it.copy(hidden = it.hidden + selected) }) {
-                        confirming = false; selecting = false; selected = emptySet()
+        ArtistOverlayTransition(downloadsOpen) {
+            DirectoryDownloadsPanel(deps, directoryForeground, directoryPanel) { downloadsOpen = false }
+        }
+        ArtistOverlayTransition(confirming) {
+            DirectoryDialog("移除 $removalCount 位艺人？", { confirming = false }) {
+                SaltText("仅移出列表，可恢复；歌曲和文件保留。", color = directoryMuted, size = 14.sp, maxLines = 3)
+                Spacer(Modifier.height(20.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    DirectoryButton("取消") { confirming = false }
+                    DirectoryButton("确认移除", accent = true) {
+                        if (save { it.copy(hidden = it.hidden + selected) }) {
+                            confirming = false; selecting = false; selected = emptySet()
+                        }
                     }
                 }
             }
         }
-        if (restoring) DirectoryDialog("已移除的艺人", { restoring = false }) {
-            if (prefs.hidden.isEmpty()) SaltText("没有已移除的艺人", color = directoryMuted)
-            else {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DirectoryButton(if (restoreSelected == prefs.hidden) "取消全选" else "全选") {
-                        restoreSelected = if (restoreSelected == prefs.hidden) emptySet() else prefs.hidden
+        ArtistOverlayTransition(restoring) {
+            DirectoryDialog("已移除的艺人", { restoring = false }) {
+                if (prefs.hidden.isEmpty()) SaltText("没有已移除的艺人", color = directoryMuted)
+                else {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DirectoryButton(if (restoreSelected == prefs.hidden) "取消全选" else "全选") {
+                            restoreSelected = if (restoreSelected == prefs.hidden) emptySet() else prefs.hidden
+                        }
+                        DirectoryButton("恢复所选 (${restoreSelected.size})", enabled = restoreSelected.isNotEmpty(), accent = true) {
+                            if (save { it.copy(hidden = it.hidden - restoreSelected) }) restoreSelected = emptySet()
+                        }
+                        DirectoryButton("全部恢复") { if (save { it.copy(hidden = emptySet()) }) restoreSelected = emptySet() }
                     }
-                    DirectoryButton("恢复所选 (${restoreSelected.size})", enabled = restoreSelected.isNotEmpty(), accent = true) {
-                        if (save { it.copy(hidden = it.hidden - restoreSelected) }) restoreSelected = emptySet()
-                    }
-                    DirectoryButton("全部恢复") { if (save { it.copy(hidden = emptySet()) }) restoreSelected = emptySet() }
-                }
-                LazyColumn(Modifier.heightIn(max = 360.dp).fillMaxWidth().padding(top = 12.dp)) {
-                    items(prefs.hidden.toList().sorted(), key = { it }) { name ->
-                        Row(Modifier.fillMaxWidth().semantics { contentDescription = "恢复选择 $name"; toggleableState = ToggleableState(name in restoreSelected) }
-                            .clickable(role = Role.Checkbox) {
-                            restoreSelected = if (name in restoreSelected) restoreSelected - name else restoreSelected + name
-                        }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            DirectorySelectionIndicator(name in restoreSelected, Modifier.size(22.dp))
-                            Spacer(Modifier.width(8.dp))
-                            SaltText(name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = directoryForeground)
-                            DirectoryButton("恢复") {
-                                if (save { p -> p.copy(hidden = p.hidden - name) }) restoreSelected = restoreSelected - name
+                    LazyColumn(Modifier.heightIn(max = 360.dp).fillMaxWidth().padding(top = 12.dp)) {
+                        items(prefs.hidden.toList().sorted(), key = { it }) { name ->
+                            Row(Modifier.fillMaxWidth().semantics { contentDescription = "恢复选择 $name"; toggleableState = ToggleableState(name in restoreSelected) }
+                                .clickable(role = Role.Checkbox) {
+                                restoreSelected = if (name in restoreSelected) restoreSelected - name else restoreSelected + name
+                            }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                DirectorySelectionIndicator(name in restoreSelected, Modifier.size(22.dp))
+                                Spacer(Modifier.width(8.dp))
+                                SaltText(name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = directoryForeground)
+                                DirectoryButton("恢复") {
+                                    if (save { p -> p.copy(hidden = p.hidden - name) }) restoreSelected = restoreSelected - name
+                                }
                             }
                         }
                     }

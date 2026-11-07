@@ -24,12 +24,14 @@ import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
  */
 class ArtistRepository(private val log: PluginLog) {
     private val tracksState = mutableStateOf<List<ArtistTrack>?>(null)
+    private val nativeTracksState = mutableStateOf<Map<String, Any>>(emptyMap())
     private val loading = AtomicBoolean(false)
     private val loadGeneration = AtomicInteger()
     private data class CachedModel(val source: List<ArtistTrack>, val model: ArtistPageModel)
     private val modelCache = ConcurrentHashMap<String, CachedModel>()
 
     val tracks: List<ArtistTrack>? get() = tracksState.value
+    internal val nativeTracks: Map<String, Any> get() = nativeTracksState.value
 
     /** 全库曲目（编辑器「添加歌曲」的搜索来源）。 */
     val allTracks: List<ArtistTrack> get() = tracksState.value.orEmpty()
@@ -54,13 +56,16 @@ class ArtistRepository(private val log: PluginLog) {
                 // MediaItem drops addedTime. Read the same API implementation's raw
                 // Track query in the background; RepoService.snapshotTracks is not
                 // guaranteed to contain the initial library at plugin startup.
-                queryHostLibraryAddedTimes(library).orTimeout(8, TimeUnit.SECONDS)
-                    .whenComplete metadata@{ addedTimes, metadataError ->
+                queryHostLibraryTracks(library).orTimeout(8, TimeUnit.SECONDS)
+                    .whenComplete metadata@{ nativeTracks, metadataError ->
                         if (generation != loadGeneration.get() || tracksState.value !== mapped) return@metadata
                         if (metadataError != null) {
                             log.log("library added-time unavailable: ${metadataError.javaClass.simpleName}")
                             return@metadata
                         }
+                        val snapshot = nativeTracks.orEmpty()
+                        nativeTracksState.value = nativeTracksById(snapshot)
+                        val addedTimes = libraryAddedTimesFromHostSnapshot(snapshot)
                         val enriched = mapped.map { track ->
                             track.copy(libraryAddedTime = addedTimes?.get(track.id) ?: 0L)
                         }
@@ -82,6 +87,7 @@ class ArtistRepository(private val log: PluginLog) {
     fun invalidate() {
         loadGeneration.incrementAndGet()
         modelCache.clear()
+        nativeTracksState.value = emptyMap()
         tracksState.value = null
         loading.set(false)
     }
@@ -170,7 +176,12 @@ class ArtistRepository(private val log: PluginLog) {
 }
 
 internal fun queryHostLibraryAddedTimes(library: Any): CompletableFuture<Map<String, Long>> {
-    val future = CompletableFuture<Map<String, Long>>()
+    return queryHostLibraryTracks(library).thenApply(::libraryAddedTimesFromHostSnapshot)
+}
+
+/** Preserve original host Track instances for native table/menu actions; never synthesize entities. */
+internal fun queryHostLibraryTracks(library: Any): CompletableFuture<List<Any>> {
+    val future = CompletableFuture<List<Any>>()
     CompletableFuture.runAsync {
         runCatching {
             // 1.19.1 bytecode: the Library implementation's sole public static
@@ -186,7 +197,7 @@ internal fun queryHostLibraryAddedTimes(library: Any): CompletableFuture<Map<Str
                 ?: error("Raw library query unavailable")
             fun complete(value: Any?) {
                 val rawTracks = value as? Iterable<*> ?: error("Raw library query did not return tracks")
-                future.complete(libraryAddedTimesFromHostSnapshot(rawTracks))
+                future.complete(rawTracks.filterNotNull().toList())
             }
             val continuation = object : Continuation<Any?> {
                 override val context = EmptyCoroutineContext
@@ -202,6 +213,13 @@ internal fun queryHostLibraryAddedTimes(library: Any): CompletableFuture<Map<Str
         }.onFailure(future::completeExceptionally)
     }
     return future
+}
+
+internal fun nativeTracksById(snapshot: Iterable<*>): Map<String, Any> = buildMap {
+    snapshot.filterNotNull().forEach { track ->
+        runCatching { track.javaClass.getMethod("getId").invoke(track) as? String }.getOrNull()
+            ?.takeIf(String::isNotBlank)?.let { put(it, track) }
+    }
 }
 
 /**
