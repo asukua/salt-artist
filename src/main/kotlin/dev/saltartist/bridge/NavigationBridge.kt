@@ -2,6 +2,9 @@ package dev.saltartist.bridge
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocal
+import androidx.compose.runtime.InternalComposeApi
+import androidx.compose.runtime.currentComposer
+import androidx.compose.animation.AnimatedVisibilityScope
 import dev.saltartist.PluginLog
 
 /**
@@ -10,6 +13,13 @@ import dev.saltartist.PluginLog
  * 页面必须自己调用 Navigator.back() / navigate(AlbumContent)。
  */
 class NavigationBridge(private val log: PluginLog) {
+    private val localAnimatedScope: CompositionLocal<Any>? by lazy {
+        @Suppress("UNCHECKED_CAST")
+        runCatching {
+            Class.forName("androidx.navigation3.ui.LocalNavAnimatedContentScopeKt")
+                .getMethod("getLocalNavAnimatedContentScope").invoke(null) as? CompositionLocal<Any>
+        }.getOrNull()
+    }
     private val localNavigator: CompositionLocal<Any>? by lazy {
         val method = runCatching {
             Class.forName(APP_NAVIGATION_CLASS).methods
@@ -24,6 +34,25 @@ class NavigationBridge(private val log: PluginLog) {
     /** 必须在 @Composable 作用域内调用；宿主缺失时返回 null。 */
     @Composable
     fun navigator(): Any? = localNavigator?.current
+
+    @OptIn(InternalComposeApi::class)
+    @Composable
+    internal fun isDirectoryExitFading(): Boolean {
+        val local = localAnimatedScope ?: return false
+        val composer = currentComposer
+        val scope = runCatching { composer.consume(local) as? AnimatedVisibilityScope }.getOrNull() ?: return false
+        val alpha = scope.transition.animations.firstOrNull { it.label == "Built-in alpha" }?.value as? Float
+        return alpha != null && alpha < 1f
+    }
+
+    internal fun isArtistDirectoryCurrent(navigator: Any?): Boolean {
+        if (navigator?.javaClass?.name != "com.xuncorp.voxzen.ui.navigation.Navigator") return true
+        return runCatching {
+            val stack = navigator.javaClass.getMethod("getNavBackStack").invoke(navigator) as? List<*> ?: return true
+            val route = stack.lastOrNull() ?: return true
+            route.javaClass.name == "com.xuncorp.voxzen.ui.navigation.ScreenRoute\$Artist"
+        }.getOrDefault(true)
+    }
 
     fun back(navigator: Any?): Boolean {
         val method = HostReflection.noArgMethod(navigator, "back") ?: return false

@@ -8,9 +8,25 @@ import kotlin.test.*
 @OptIn(UnstableSpwWorkshopApi::class)
 class DirectoryBackgroundTest {
     @Test
+    fun hostMaterialFollowsRecognizedWindowStylesOnly() {
+        for (style in DirectoryStyle.entries) {
+            assertTrue(directoryUsesHostBackdrop(DirectoryBackgroundMode.SYSTEM, style))
+            assertFalse(directoryUsesHostBackdrop(DirectoryBackgroundMode.CUSTOM, style))
+        }
+        assertFalse(directoryUsesHostBackdrop(DirectoryBackgroundMode.SYSTEM, null))
+    }
+
+    @Test
+    fun followHostPersistsWithoutChangingCustomSettings() {
+        val config = BackgroundConfig(true)
+        val material = DirectoryBackground(DirectoryBackgroundMode.SYSTEM, "#987654", "wallpaper.png")
+        ArtistSettings(config).use { assertTrue(it.setDirectoryBackground(material)) }
+        ArtistSettings(config).use { assertEquals(material, it.read().directoryBackground) }
+    }
+
+    @Test
     fun oldAndInvalidPreferencesFollowHostAndKeepASafeCustomColor() {
-        for (values in listOf(emptyMap(), mapOf(ArtistSettings.KEY_DIRECTORY_BACKGROUND to "bad", ArtistSettings.KEY_DIRECTORY_COLOR to "#oops"),
-            mapOf(ArtistSettings.KEY_DIRECTORY_BACKGROUND to "LIGHT"), mapOf(ArtistSettings.KEY_DIRECTORY_BACKGROUND to "DARK"))) {
+        for (values in listOf(emptyMap(), mapOf(ArtistSettings.KEY_DIRECTORY_BACKGROUND to "bad", ArtistSettings.KEY_DIRECTORY_COLOR to "#oops"))) {
             val background = artistSettingsFromValues(values).directoryBackground
             assertEquals(DirectoryBackgroundMode.SYSTEM, background.mode)
             assertEquals("#243448", background.color)
@@ -33,17 +49,21 @@ class DirectoryBackgroundTest {
     }
 
     @Test
-    fun retiredLightAndDarkChoicesAreMigratedForTheHostPreferenceControl() {
-        for (old in listOf("LIGHT", "DARK")) {
+    fun legacyBackgroundChoicesArePreservedOrMigrated() {
+        for (old in listOf("LIGHT", "DARK", "MATERIAL")) {
             val config = BackgroundConfig(true)
             config.values[ArtistSettings.KEY_DIRECTORY_BACKGROUND] = old
             ArtistSettings(config).use { assertEquals(DirectoryBackgroundMode.SYSTEM, it.read().directoryBackground.mode) }
             assertEquals("SYSTEM", config.values[ArtistSettings.KEY_DIRECTORY_BACKGROUND])
         }
+        val custom = BackgroundConfig(true)
+        custom.values[ArtistSettings.KEY_DIRECTORY_BACKGROUND] = "CUSTOM"
+        ArtistSettings(custom).use { assertEquals(DirectoryBackgroundMode.CUSTOM, it.read().directoryBackground.mode) }
+        assertEquals("CUSTOM", custom.values[ArtistSettings.KEY_DIRECTORY_BACKGROUND])
         val failed = BackgroundConfig(false)
-        failed.values[ArtistSettings.KEY_DIRECTORY_BACKGROUND] = "DARK"
+        failed.values[ArtistSettings.KEY_DIRECTORY_BACKGROUND] = "MATERIAL"
         ArtistSettings(failed).use { assertEquals(DirectoryBackgroundMode.SYSTEM, it.read().directoryBackground.mode) }
-        assertEquals("DARK", failed.values[ArtistSettings.KEY_DIRECTORY_BACKGROUND])
+        assertEquals("MATERIAL", failed.values[ArtistSettings.KEY_DIRECTORY_BACKGROUND])
     }
 
     @Test

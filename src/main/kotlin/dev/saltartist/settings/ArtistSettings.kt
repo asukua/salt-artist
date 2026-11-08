@@ -121,10 +121,8 @@ class ArtistSettings(private val config: ConfigHelper?) : AutoCloseable {
                 stamp = fileStamp()
             }
         }
-        // 0.3.1 previously exposed LIGHT/DARK; migrate those values so the
-        // host's two-option preference control also shows the current choice.
         val oldMode = get(KEY_DIRECTORY_BACKGROUND, "SYSTEM")
-        if (oldMode == "LIGHT" || oldMode == "DARK") {
+        if (oldMode == "LIGHT" || oldMode == "DARK" || oldMode == "MATERIAL") {
             val saved = runCatching {
                 config?.set(KEY_DIRECTORY_BACKGROUND, "SYSTEM")
                 config?.save() == true

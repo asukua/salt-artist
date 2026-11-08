@@ -6,6 +6,11 @@ enum class DirectoryBackgroundMode(val label: String) {
     SYSTEM("跟随椒盐设置"), CUSTOM("自定义")
 }
 
+enum class DirectoryStyle { CLASSIC, ACRYLIC, MICA, MICA_ALT }
+
+internal fun directoryUsesHostBackdrop(mode: DirectoryBackgroundMode, style: DirectoryStyle?): Boolean =
+    mode == DirectoryBackgroundMode.SYSTEM && style != null
+
 internal fun parseBackgroundColor(value: String): Color? = value.trim().removePrefix("#")
     .takeIf { it.matches(Regex("[0-9a-fA-F]{6}")) }?.toLongOrNull(16)?.let { Color(0xFF000000L or it) }
 

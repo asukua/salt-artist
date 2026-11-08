@@ -1,8 +1,13 @@
 package dev.saltartist.bridge
 
 import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Composer
+import androidx.compose.runtime.InternalComposeApi
+import androidx.compose.runtime.currentComposer
 import androidx.compose.ui.graphics.Color
 import dev.saltartist.hook.HookTargets
+import dev.saltartist.settings.DirectoryStyle
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
@@ -10,6 +15,37 @@ import java.lang.reflect.Modifier
 
 /** SaltTheme ABI shared by verified directory hosts; never mutate its global config. */
 internal class ArtistDirectoryThemeBridge {
+    private var tintContract: String? = null
+    private var tintMethod: java.lang.reflect.Method? = null
+
+    @OptIn(InternalComposeApi::class)
+    @Composable
+    fun navigationTint(targets: HookTargets.DirectoryTargets?): Color? {
+        val tintClass = targets?.navigationTintClass ?: return null
+        if (tintClass != tintContract) {
+            tintContract = tintClass
+            tintMethod = runCatching {
+                Class.forName(tintClass).getMethod("\u037F", Composer::class.java).also {
+                    require(Modifier.isStatic(it.modifiers) && it.returnType == Long::class.javaPrimitiveType)
+                }
+            }.getOrNull()
+        }
+        val tint = tintMethod ?: return null
+        val composer = currentComposer
+        return runCatching { Color((tint.invoke(null, composer) as Long).toULong()) }.getOrNull()
+    }
+
+    private val windowStyle by lazy {
+        runCatching {
+            val type = Class.forName("com.xuncorp.voxzen.util.AppConfig")
+            type.getField("INSTANCE").get(null) to type.getMethod("getSpwWindowStyle")
+        }.getOrNull()
+    }
+
+    fun windowStyle(): DirectoryStyle? = runCatching {
+        val (config, getter) = windowStyle ?: return null
+        directoryHostStyle((getter.invoke(config) as Enum<*>).name)
+    }.getOrNull()
     val configLocal: ProvidableCompositionLocal<Any> by lazy {
         @Suppress("UNCHECKED_CAST")
         (Class.forName("androidx.compose.ui.\u02B6").getMethod("\u037F").invoke(null) as ProvidableCompositionLocal<Any>)
@@ -37,6 +73,14 @@ internal class ArtistDirectoryThemeBridge {
         require(Modifier.isStatic(copy.modifiers) && copy.returnType == current.javaClass)
         return copy.invoke(null, current, dark)
     }
+}
+
+internal fun directoryHostStyle(name: String): DirectoryStyle? = when (name) {
+    "None" -> DirectoryStyle.CLASSIC
+    "WindowsAcrylic" -> DirectoryStyle.ACRYLIC
+    "WindowsMica" -> DirectoryStyle.MICA
+    "WindowsMicaAlt" -> DirectoryStyle.MICA_ALT
+    else -> null
 }
 
 /** The same unfiltered Artist flow consumed by the native directory ViewModel. */

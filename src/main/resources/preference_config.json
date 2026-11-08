@@ -8,7 +8,6 @@
           "key": "directory_background",
           "type": "list",
           "title": "列表背景",
-          "summary": "仅应用于艺术家总列表。选择「自定义」后使用下方设置的颜色或图片",
           "entries": [
             "跟随椒盐设置",
             "自定义"

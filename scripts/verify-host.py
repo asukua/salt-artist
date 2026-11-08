@@ -286,8 +286,37 @@ def main():
         # Native song components are enabled only for the verified 1.19.3
         # profile. Keep older profiles' existing verification scope unchanged.
         if report.get("hostVersion") == "1.19.3":
+            app_config = "com/xuncorp/voxzen/util/AppConfig"
+            window_style = "com/xuncorp/voxzen/ui/theme/SpwWindowStyle"
+            check("host window style singleton", member_exists(app_config, "INSTANCE", "L" + app_config + ";", 9))
+            check("host window style getter", member_exists(app_config, "getSpwWindowStyle", "()L" + window_style + ";", 1))
+            style_bytes = archive.read(window_style + ".class")
+            check("host window style names", all(name.encode("utf-8") in style_bytes for name in
+                ("None", "WindowsAcrylic", "WindowsMica", "WindowsMicaAlt")))
+            navigator = "com/xuncorp/voxzen/ui/navigation/Navigator"
+            artist_route = "com/xuncorp/voxzen/ui/navigation/ScreenRoute$Artist"
+            check("navigation back stack getter", member_exists(navigator, "getNavBackStack",
+                  "()Landroidx/navigation3/runtime/NavBackStack;", 1))
+            check("artist directory route singleton", member_exists(artist_route, "INSTANCE", "L" + artist_route + ";", 9))
+            nav_scope = "androidx/navigation3/ui/LocalNavAnimatedContentScopeKt"
+            check("navigation animated scope local", member_exists(nav_scope, "getLocalNavAnimatedContentScope",
+                  "()Landroidx/compose/runtime/ProvidableCompositionLocal;", 9))
+            check("navigation exit alpha label", b"Built-in" in archive.read("androidx/compose/animation/AnimatedVisibilityKt.class") and
+                  b" alpha" in archive.read("androidx/compose/animation/EnterExitTransitionKt.class"))
             ui = "androidx/compose/ui/"
             composer = "Landroidx/compose/runtime/Composer;"
+            nav_tint, nav_preserve, nav_surface = ui + "\u06ba", ui + "\u018e", ui + "\u092c"
+            check("navigation tint getter", member_exists(nav_tint, "\u037f", "(" + composer + ")J", 9) and
+                  b"navigationContentBackgroundColor" in archive.read(nav_tint + ".class"))
+            check("navigation tint preserve getter", member_exists(nav_preserve, "\u037f", "(" + composer + ")Z", 9) and
+                  b"preserveMiniPlayerNavigationBackground" in archive.read(nav_preserve + ".class"))
+            check("navigation surface uses host tint", any(ref["owner"] == nav_tint and ref["name"] == "\u037f" and
+                  ref["descriptor"] == "(" + composer + ")J" for ref in read(nav_surface)["refs"]))
+            main_surface = read(ui + "\u0525")
+            check("preserved navigation background uses host tint", any(ref["owner"] == nav_tint and
+                  ref["name"] == "\u037f" and ref["descriptor"] == "(FFZLandroidx/compose/ui/Modifier;" + composer + "II)V"
+                  for ref in main_surface["refs"]) and any(ref["owner"] == nav_preserve and ref["name"] == "\u037f" and
+                  ref["descriptor"] == "(" + composer + ")Z" for ref in main_surface["refs"]))
             local_descriptor = "Landroidx/compose/runtime/ProvidableCompositionLocal;"
             native_list = ui + "\u05ea"
             native_menu = ui + "\u0e09"

@@ -23,6 +23,7 @@ internal class ArtistDirectoryState(private val log: PluginLog) {
     private val state = mutableStateOf<List<DirectoryArtist>?>(null)
     val artists: List<DirectoryArtist>? get() = state.value
     private var lastState: Any? = null
+    private val failedState = mutableStateOf<Any?>(null)
     private val observed = mutableStateOf<StateFlow<*>?>(null)
     val flow: StateFlow<*>? get() = observed.value
 
@@ -33,13 +34,17 @@ internal class ArtistDirectoryState(private val log: PluginLog) {
 
     fun detach() { observed.value = null; reset() }
 
+    fun isWaitingFor(ready: Any?, readyClass: String): Boolean =
+        ready != null && ready.javaClass.name == readyClass && artists == null && failedState.value !== ready
+
     fun capture(ready: Any?) {
         if (ready == null || ready === lastState) return
         runCatching { directoryArtistsFromState(ready) }.onSuccess {
             lastState = ready
+            failedState.value = null
             state.value = it
             log.logOnce("directory-020-ready", "directory controls ready artists=${it.size}")
-        }.onFailure { reset(); log.logOnce("directory-020-state", "directory kept native UI: ${log.describe(it)}") }
+        }.onFailure { reset(); failedState.value = ready; log.logOnce("directory-020-state", "directory kept native UI: ${log.describe(it)}") }
     }
 
     suspend fun captureAsync(ready: Any?) {
@@ -47,13 +52,14 @@ internal class ArtistDirectoryState(private val log: PluginLog) {
         try {
             val artists = withContext(Dispatchers.Default) { directoryArtistsFromState(ready) }
             lastState = ready
+            failedState.value = null
             state.value = artists
             log.logOnce("directory-020-ready", "directory controls ready artists=${artists.size}")
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { reset(); log.logOnce("directory-020-state", "directory kept native UI: ${log.describe(error)}") }
+        catch (error: Exception) { reset(); failedState.value = ready; log.logOnce("directory-020-state", "directory kept native UI: ${log.describe(error)}") }
     }
 
-    fun reset() { lastState = null; state.value = null }
+    fun reset() { lastState = null; failedState.value = null; state.value = null }
 }
 
 internal fun directoryArtistsFromState(ready: Any): List<DirectoryArtist> {

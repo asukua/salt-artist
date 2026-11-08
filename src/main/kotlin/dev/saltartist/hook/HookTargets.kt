@@ -27,6 +27,7 @@ object HookTargets {
         val viewModelClass: String = "androidx.compose.ui.\u05E1",
         val readyStateClass: String = "androidx.compose.ui.\u04DB\$\u0528",
         val stateFlowMethod: String = "\u052A",
+        val navigationTintClass: String? = null,
     )
 
     const val ARTIST_PAGE_METHOD = "\u037F"
@@ -91,6 +92,7 @@ object HookTargets {
                 artistRepositoryClass = "androidx.compose.ui.\u10B9",
                 viewModelClass = "androidx.compose.ui.\u05E6",
                 readyStateClass = "androidx.compose.ui.\u0C36\$\u0528",
+                navigationTintClass = "androidx.compose.ui.\u06BA",
             ),
         ),
     )

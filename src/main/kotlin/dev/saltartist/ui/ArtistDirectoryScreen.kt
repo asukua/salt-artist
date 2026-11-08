@@ -25,6 +25,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.SolidColor
@@ -57,7 +59,6 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.collectLatest
 
 private val LocalDirectoryPalette = staticCompositionLocalOf { directoryPalette(Color(0xFF202020), true) }
 private val directoryBackground: Color @Composable get() = LocalDirectoryPalette.current.background
@@ -78,11 +79,12 @@ internal fun directoryArtistLabel(name: String, favorite: Boolean): String = if 
 internal fun ArtistDirectoryHost(deps: ArtistScreenDeps, readyClass: String) {
     DisposableEffect(deps.directory) { onDispose { deps.directory.detach() } }
     val flow = deps.directory.flow ?: return
-    LaunchedEffect(flow, readyClass) {
-        flow.collectLatest { nativeState ->
-            if (nativeState?.javaClass?.name == readyClass) deps.directory.captureAsync(nativeState)
-            else deps.directory.reset()
-        }
+    val collectedState by flow.collectAsState()
+    val latestState = flow.value
+    val nativeState = if (latestState === collectedState) collectedState else latestState
+    LaunchedEffect(flow, nativeState, readyClass) {
+        if (nativeState?.javaClass?.name == readyClass) deps.directory.captureAsync(nativeState)
+        else deps.directory.reset()
     }
     val theme = remember { ArtistDirectoryThemeBridge() }
     val local = remember { runCatching { theme.configLocal }.getOrNull() } ?: return
@@ -90,25 +92,46 @@ internal fun ArtistDirectoryHost(deps: ArtistScreenDeps, readyClass: String) {
     val current = local.current
     val colors = colorsLocal.current
     val hostDark = runCatching { theme.isDark(current) }.getOrNull() ?: return
-    val hostSurface = runCatching { theme.background(colors, hostDark) }.getOrNull() ?: return
     val preference = deps.settings.read().directoryBackground
     val custom = preference.mode == DirectoryBackgroundMode.CUSTOM
     val base = parseBackgroundColor(preference.color) ?: Color(0xFF243448)
     val image = if (custom && preference.imagePath.isNotBlank()) deps.artwork.localLogo(java.io.File(preference.imagePath)) else null
     val dark = if (custom) image != null || base.luminance() < 0.179f else hostDark
+    val hostSurface = runCatching { theme.background(colors, hostDark) }.getOrNull() ?: return
     val surface = if (!custom) hostSurface else if (image == null) base else Color(0xFF202020)
     val config = remember(current, dark, custom) { runCatching { if (custom) theme.configFor(current, dark) else current }.getOrNull() } ?: return
+    val hostStyle = if (custom) null else theme.windowStyle()
+    val hostBackdrop = directoryUsesHostBackdrop(preference.mode, hostStyle)
+    val navigator = deps.navigation.navigator()
+    val active = if (deps.directoryTargets?.navigationTintClass != null)
+        deps.navigation.isArtistDirectoryCurrent(navigator) else true
+    val hostTint = if (hostBackdrop) theme.navigationTint(deps.directoryTargets) ?: run {
+        deps.log.logOnce("directory-navigation-tint", "host navigation tint unavailable; keeping transparent backdrop")
+        Color.Transparent
+    } else Color.Transparent
+    val fading = if (hostBackdrop && !active) deps.navigation.isDirectoryExitFading() else false
+    val tint = directoryExitTint(active, fading, hostTint)
     CompositionLocalProvider(local provides config, LocalDirectoryPalette provides directoryPalette(surface, dark, image != null)) {
-        ArtistDirectoryScreen(deps, image)
+        ArtistDirectoryScreen(deps, image, hostBackdrop, tint, deps.directory.isWaitingFor(nativeState, readyClass))
     }
 }
+
+internal fun directoryExitTint(active: Boolean, fading: Boolean, tint: Color): Color =
+    if (!active && fading) Color.Transparent else tint
 
 /** Sibling overlay in the navigation Box, below the host's mini player. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps, backgroundImage: androidx.compose.ui.graphics.ImageBitmap? = null) {
-    val source = deps.directory.artists ?: return // Keep the native loading/error screen.
+internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps, backgroundImage: androidx.compose.ui.graphics.ImageBitmap? = null,
+    windowMaterial: Boolean = false, navigationTint: Color = Color.Transparent, waitingForCapture: Boolean = false) {
+    val source = deps.directory.artists
     val browsing = deps.directoryBrowsing
+    if (source == null) {
+        if (waitingForCapture && !browsing.nativeInterface) {
+            DirectoryLoadingBackdrop(windowMaterial, directoryBackground, navigationTint, backgroundImage)
+        }
+        return
+    }
     if (browsing.nativeInterface) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             Box(Modifier.padding(top = 10.dp).size(36.dp).clip(RoundedCornerShape(7.dp))
@@ -150,12 +173,9 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps, backgroundImage: andr
         else if (!deps.navigation.openArtist(navigator, artist.name)) message = "无法打开艺人页面"
     }
 
-    Box(Modifier.fillMaxSize().background(directoryBackground).clickable(indication = null,
+    Box(Modifier.fillMaxSize().directoryBackdrop(windowMaterial, directoryBackground, navigationTint).clickable(indication = null,
         interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) { }) {
-        if (backgroundImage != null) {
-            Image(backgroundImage, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.64f)))
-        }
+        DirectoryBackdropImage(backgroundImage)
         Column(Modifier.fillMaxSize().padding(horizontal = 22.dp).padding(top = 16.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SaltText("艺术家", size = 24.sp, weight = FontWeight.Bold, color = directoryForeground)
@@ -295,6 +315,31 @@ internal fun ArtistDirectoryScreen(deps: ArtistScreenDeps, backgroundImage: andr
         }
     }
 }
+
+@Composable
+internal fun DirectoryLoadingBackdrop(windowMaterial: Boolean, color: Color, tint: Color,
+    image: androidx.compose.ui.graphics.ImageBitmap?) {
+    Box(Modifier.fillMaxSize().directoryBackdrop(windowMaterial, color, tint).clickable(indication = null,
+        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) { }) {
+        DirectoryBackdropImage(image)
+    }
+}
+
+@Composable
+private fun BoxScope.DirectoryBackdropImage(image: androidx.compose.ui.graphics.ImageBitmap?) {
+    if (image != null) {
+        Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.64f)))
+    }
+}
+
+/** Clear native content and restore the host navigation tint over the window backdrop. */
+internal fun Modifier.directoryBackdrop(windowMaterial: Boolean, color: Color, tint: Color = Color.Transparent): Modifier =
+    if (!windowMaterial) background(color) else drawWithContent {
+        drawRect(Color.Transparent, blendMode = BlendMode.Clear)
+        drawRect(tint)
+        drawContent()
+    }
 
 /** Fixed-size geometry keeps selected and unselected controls circular in every font and scale. */
 @Composable

@@ -28,6 +28,26 @@ class ArtistDirectoryStateTest {
     class Group(private val items: List<Artist>) { fun items() = items; operator fun component2() = items }
     class Ready(private val groups: List<Group>) { fun groups() = groups }
 
+    @Test fun waitsOnlyWhileAReadyStateCanStillBeConverted() {
+        val bridge = ArtistDirectoryState(dev.saltartist.PluginLog(null))
+        val ready = Ready(listOf(Group(listOf(Artist("A")))))
+        val invalid = Ready(listOf(Group(listOf(Artist("A"), Artist("A")))))
+        val readyClass = Ready::class.java.name
+        assertFalse(bridge.isWaitingFor(null, readyClass))
+        assertFalse(bridge.isWaitingFor(Any(), readyClass))
+        assertTrue(bridge.isWaitingFor(ready, readyClass))
+        bridge.capture(ready)
+        assertFalse(bridge.isWaitingFor(ready, readyClass))
+        bridge.reset()
+        assertTrue(bridge.isWaitingFor(invalid, readyClass))
+        kotlinx.coroutines.runBlocking { bridge.captureAsync(invalid) }
+        assertNull(bridge.artists)
+        assertFalse(bridge.isWaitingFor(invalid, readyClass))
+        assertTrue(bridge.isWaitingFor(ready, readyClass))
+        bridge.detach()
+        assertTrue(bridge.isWaitingFor(invalid, readyClass))
+    }
+
     @Test fun readsOnlyTheNativeGroupItemsInOrder() {
         val state = Ready(listOf(Group(listOf(Artist("B"), Artist("AC/DC"))), Group(listOf(Artist("A")))))
         assertEquals(listOf("B", "AC/DC", "A"), directoryArtistsFromState(state).map { it.name })

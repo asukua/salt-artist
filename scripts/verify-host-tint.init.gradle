@@ -1,0 +1,17 @@
+// Run together with verify-artwork.init.gradle and -PhostArchive=<local SPW archive>.
+allprojects {
+    afterEvaluate {
+        def hostArchive = providers.gradleProperty('hostArchive')
+        tasks.register('verifyHostNavigationTint', Test) {
+            dependsOn tasks.named('testClasses')
+            testClassesDirs = sourceSets.test.output.classesDirs
+            classpath = files(hostArchive.get()) + sourceSets.test.runtimeClasspath
+            filter.includeTestsMatching('dev.saltartist.ui.HostNavigationTintRuntimeTest')
+            systemProperty 'java.awt.headless', 'true'
+            systemProperty 'host.archive', file(hostArchive.get()).canonicalPath
+            systemProperty 'skiko.library.path', file(hostArchive.get()).parentFile.canonicalPath
+            jvmArgs '--enable-native-access=ALL-UNNAMED'
+            testLogging { events 'passed', 'failed'; showStandardStreams = true }
+        }
+    }
+}

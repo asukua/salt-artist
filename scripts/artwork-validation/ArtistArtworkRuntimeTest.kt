@@ -3,22 +3,36 @@
 package dev.saltartist.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.NavigationTintTestHost
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -36,10 +50,16 @@ import dev.saltartist.artwork.ArtworkPalette
 import dev.saltartist.artwork.ArtworkStore
 import dev.saltartist.artwork.DemandArtworkCache
 import dev.saltartist.bridge.NavigationBridge
+import dev.saltartist.bridge.ArtistDirectoryThemeBridge
 import dev.saltartist.bridge.PlaybackBridge
+import dev.saltartist.hook.HookTargets
 import dev.saltartist.data.*
 import dev.saltartist.settings.ArtistProfileStore
 import dev.saltartist.settings.ArtistSettings
+import dev.saltartist.settings.DirectoryBackgroundMode
+import dev.saltartist.settings.directoryUsesHostBackdrop
+import com.xuncorp.voxzen.util.AppConfig
+import com.xuncorp.voxzen.util.TestWindowStyle
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -59,6 +79,194 @@ class ArtistArtworkRuntimeTest {
     private val animationOutput = File(output, "animation").apply { mkdirs() }
     private val log = PluginLog(null)
     private val sceneTimes = WeakHashMap<ImageComposeScene, Long>()
+
+    @Test fun windowMaterialClearsTheCoveredDirectoryButKeepsPluginContent() {
+        val scene = ImageComposeScene(120, 100) {
+            Box(Modifier.fillMaxSize().background(Color.Red)) {
+                Box(Modifier.fillMaxSize().directoryBackdrop(true, Color.Black)) {
+                    Box(Modifier.width(20.dp).height(20.dp).background(Color.Green))
+                }
+            }
+        }
+        try {
+            scene.render(System.nanoTime()).use { image ->
+                val bytes = image.encodeToData(EncodedImageFormat.PNG)!!.use { it.bytes }
+                val bitmap = ImageIO.read(bytes.inputStream())
+                assertEquals(0, bitmap.getRGB(80, 80) ushr 24, "Native directory should be cleared")
+                assertEquals(0xFF00FF00.toInt(), bitmap.getRGB(10, 10), "Plugin content should remain visible")
+            }
+        } finally { scene.close() }
+    }
+
+    @Test fun directoryEntryCoversNativeContentUntilCaptureCompletes() {
+        class Ready(val groups: List<Any>)
+        for (hostBackdrop in listOf(false, true)) {
+            val deps = deps(ArtworkStore(null, log))
+            val good = Ready(emptyList())
+            val invalid = Ready(listOf(Any()))
+            val current = mutableStateOf(good)
+            val scene = ImageComposeScene(120, 100) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF112233))) {
+                    Box(Modifier.fillMaxSize().graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)) {
+                        Box(Modifier.fillMaxSize().background(Color.Red))
+                        ArtistDirectoryScreen(deps, windowMaterial = hostBackdrop, navigationTint = Color(0x1E3A3A3A),
+                            waitingForCapture = deps.directory.isWaitingFor(current.value, Ready::class.java.name))
+                    }
+                }
+            }
+            fun pixel(): Int {
+                Snapshot.sendApplyNotifications()
+                scene.render(System.nanoTime()).use { image ->
+                    return image.encodeToData(EncodedImageFormat.PNG)!!.use { ImageIO.read(it.bytes.inputStream()).getRGB(110, 90) }
+                }
+            }
+            try {
+                val pending = pixel()
+                assertNotEquals(Color.Red.toArgb(), pending, "Native directory flashed during initial capture")
+                deps.directoryBrowsing.nativeInterface = true
+                assertEquals(Color.Red.toArgb(), pixel(), "Native view must remain available when explicitly selected")
+                deps.directoryBrowsing.nativeInterface = false
+                assertEquals(pending, pixel())
+                current.value = invalid
+                deps.directory.capture(invalid)
+                assertEquals(Color.Red.toArgb(), pixel(), "Conversion failures must return to the native directory")
+                current.value = good
+                assertEquals(pending, pixel())
+                deps.directory.capture(good)
+                assertNotEquals(Color.Red.toArgb(), pixel(), "Enhanced directory must replace the pending backdrop")
+            } finally { scene.close(); deps.close() }
+        }
+    }
+
+    @Test fun directoryBackgroundReactsToHostStyleChanges() {
+        AppConfig.spwWindowStyle = TestWindowStyle.None
+        val scene = ImageComposeScene(120, 100) {
+            val bridge = remember { ArtistDirectoryThemeBridge() }
+            val material = directoryUsesHostBackdrop(DirectoryBackgroundMode.SYSTEM, bridge.windowStyle())
+            Box(Modifier.fillMaxSize().background(Color.Red)) {
+                Box(Modifier.fillMaxSize().directoryBackdrop(material, Color.Black))
+            }
+        }
+        fun pixel(): Int {
+            Snapshot.sendApplyNotifications()
+            scene.render(System.nanoTime()).use { image ->
+                return image.encodeToData(EncodedImageFormat.PNG)!!.use { ImageIO.read(it.bytes.inputStream()).getRGB(80, 80) }
+            }
+        }
+        try {
+            assertEquals(0, pixel() ushr 24)
+            for (style in listOf(TestWindowStyle.WindowsAcrylic, TestWindowStyle.WindowsMica, TestWindowStyle.WindowsMicaAlt)) {
+                AppConfig.spwWindowStyle = style
+                assertEquals(0, pixel() ushr 24, "Expected transparent window material for $style")
+            }
+            AppConfig.spwWindowStyle = TestWindowStyle.None
+            assertEquals(0, pixel() ushr 24)
+        } finally {
+            scene.close()
+            AppConfig.spwWindowStyle = TestWindowStyle.None
+        }
+    }
+
+    @Test fun directoryTintMatchesTheNativeNavigationSurface() {
+        for (tint in listOf(Color(0x64FFFFFF), Color(0x1E3A3A3A))) {
+            for (wallpaper in listOf(Color(0xFF8FB1DA), Color(0xFF7692E3), Color(0xFF202020))) {
+                val scene = ImageComposeScene(120, 100) {
+                    Box(Modifier.fillMaxSize().background(wallpaper)) {
+                        Box(Modifier.fillMaxWidth().height(40.dp).background(tint))
+                        Box(Modifier.fillMaxSize().padding(top = 40.dp)
+                            .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)) {
+                            Box(Modifier.fillMaxSize().background(Color.Red))
+                            Box(Modifier.fillMaxSize().directoryBackdrop(true, Color.Black, tint)) {
+                                Box(Modifier.width(20.dp).height(20.dp).background(Color.Green))
+                            }
+                        }
+                    }
+                }
+                try {
+                    scene.render(System.nanoTime()).use { image ->
+                        val bitmap = image.encodeToData(EncodedImageFormat.PNG)!!.use { ImageIO.read(it.bytes.inputStream()) }
+                        assertEquals(bitmap.getRGB(80, 20), bitmap.getRGB(80, 80), "Tint mismatch for $tint on $wallpaper")
+                        assertEquals(0xFF00FF00.toInt(), bitmap.getRGB(10, 50), "Plugin content should remain visible")
+                    }
+                } finally { scene.close() }
+            }
+        }
+    }
+
+    @Test fun directoryBackgroundDoesNotLeaveABoxDuringDesktopNavigation() {
+        fun frames(pop: Boolean, clearOutgoingTint: Boolean): List<Pair<Int, Int>> {
+            val active = mutableStateOf(true)
+            val tint = Color(0x1E3A3A3A)
+            val scene = ImageComposeScene(120, 100) {
+                Box(Modifier.fillMaxSize().background(Color(0xFF202020))) {
+                    Box(Modifier.fillMaxSize().graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)) {
+                        Box(Modifier.fillMaxSize().background(tint))
+                        AnimatedContent(active.value, modifier = Modifier.fillMaxSize().padding(top = 40.dp), transitionSpec = {
+                            if (pop) fadeIn(spring(stiffness = 500f)) togetherWith
+                                (slideOutVertically(spring(stiffness = 500f)) { 150 } + fadeOut(spring(stiffness = 500f)))
+                            else slideInVertically(spring(stiffness = 500f)) { 150 } togetherWith fadeOut(spring(stiffness = 500f))
+                        }, label = "directory-navigation") { directory ->
+                            val alpha = transition.animations.firstOrNull { it.label == "Built-in alpha" }?.value as? Float
+                            if (directory) Box(Modifier.fillMaxSize()) {
+                                Box(Modifier.fillMaxSize().background(Color.Red))
+                                Box(Modifier.fillMaxSize().directoryBackdrop(true, Color.Black,
+                                    if (clearOutgoingTint) directoryExitTint(active.value, alpha != null && alpha < 1f, tint) else tint))
+                            }
+                        }
+                    }
+                }
+            }
+            var time = 1_000_000_000L
+            fun frame(): Pair<Int, Int> {
+                Snapshot.sendApplyNotifications()
+                time += 16_666_667L
+                scene.render(time).use { image ->
+                    return image.encodeToData(EncodedImageFormat.PNG)!!.use {
+                        val bitmap = ImageIO.read(it.bytes.inputStream())
+                        bitmap.getRGB(80, 20) to bitmap.getRGB(80, 80)
+                    }
+                }
+            }
+            return try {
+                repeat(4) { frame() }
+                active.value = false
+                List(30) { frame() }
+            } finally { scene.close() }
+        }
+        for (pop in listOf(false, true)) {
+            val old = frames(pop, clearOutgoingTint = false)
+            assertTrue(old.any { it.first != it.second }, "The old behavior must reproduce the box")
+            val corrected = frames(pop, clearOutgoingTint = true)
+            assertTrue(corrected.all { it.first == it.second }, "Background changed during navigation, pop=$pop: old=$old corrected=$corrected")
+        }
+    }
+
+    @Test fun navigationTintTracksHostThemeRegardlessOfPreserveFlag() {
+        NavigationTintTestHost.tint = Color(0x64FFFFFF)
+        NavigationTintTestHost.preserve = false
+        val scene = ImageComposeScene(120, 100) {
+            val bridge = remember { ArtistDirectoryThemeBridge() }
+            val tint = bridge.navigationTint(HookTargets.forHost("1.19.3")!!.directory) ?: error("Missing host tint")
+            Box(Modifier.fillMaxSize().directoryBackdrop(true, Color.Black, tint))
+        }
+        fun pixel(): Int {
+            Snapshot.sendApplyNotifications()
+            scene.render(System.nanoTime()).use { image ->
+                return image.encodeToData(EncodedImageFormat.PNG)!!.use { ImageIO.read(it.bytes.inputStream()).getRGB(80, 80) }
+            }
+        }
+        try {
+            assertEquals(0x64, pixel() ushr 24)
+            NavigationTintTestHost.tint = Color(0x1E3A3A3A)
+            assertEquals(0x1E, pixel() ushr 24)
+            NavigationTintTestHost.preserve = true
+            assertEquals(0x1E, pixel() ushr 24)
+        } finally {
+            scene.close()
+            NavigationTintTestHost.preserve = false
+            NavigationTintTestHost.tint = Color(0x64FFFFFF)
+        }
+    }
 
     @Test fun realDecoderKeeps1500CoversAndRestoresThemOfflineWithoutQuotas() {
         val directory = Files.createTempDirectory(output.toPath(), "covers-").toFile()
