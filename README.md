@@ -57,7 +57,7 @@
 1. 从 [Releases](https://github.com/asukua/salt-artist/releases/latest) 下载 `.spmod`，在椒盐音乐「模组管理」中导入并启用。
 2. 在「Salt Artist → 配置」中调整头图、资料、背景和匹配方式。
 
-已核实支持 SPW 1.19.0 至 1.19.3。具体兼容条件和功能接入方式见[兼容说明](docs/host-compatibility.md)。
+支持 SPW 1.19.0 至 1.19.3。具体兼容条件和功能接入方式见[兼容说明](docs/host-compatibility.md)。
 
 ## 开发
 
